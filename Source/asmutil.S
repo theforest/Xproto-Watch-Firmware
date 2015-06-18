@@ -11,6 +11,7 @@
 ; email me at: gabriel@gabotronics.com
 
 #include <avr/io.h>
+#include "hardware.h"
 
 ;----------------------------------------------------------------------------;
 ; ADD with Saturation
@@ -50,7 +51,7 @@ tableup:
     rjmp trigpc5
     rjmp trigpc6
     rjmp trigpc7
-    rjmp trigpb2
+    rjmp trigextu
 .endfunc
 
 ; trigger on PC0
@@ -201,20 +202,20 @@ trigpc7:
     rjmp    post
 .endfunc
 
-; trigger on PB2 (external trigger)
+; trigger up on External Trigger pin
 ;----------------------------------------------------------------------------;
 ;
-.global trigpb2
-.func trigpb2
-trigpb2:
+.global trigextu
+.func trigextu
+trigextu:
     sbic    0x000B,0        ; 2 cycle ; Status update? (GPIOB)
     ret
-    sbic    0x0012,2        ; Check if bit VPORT0.2 is low
-    rjmp    trigpb2
+    sbic    EXTPIN          ; Check if external trigger pin is low
+    rjmp    trigextu
 0:
     sbic    0x000B,0        ; 2 cycle ; Status update? (GPIOB)
     ret
-    sbis    0x0012,2        ; Check if bit VPORT0.2 is high
+    sbis    EXTPIN          ; Check if external trigger pin is high
     rjmp    0b
     rjmp    post
 .endfunc
@@ -239,7 +240,7 @@ tabledown:
     rjmp trigpc5d
     rjmp trigpc6d
     rjmp trigpc7d
-    rjmp trigpb2d
+    rjmp trigextd
 .endfunc
 
 ; trigger on PC0
@@ -391,20 +392,20 @@ trigpc7d:
     rjmp    post
 .endfunc
 
-; trigger on PB2 (external trigger)
+; trigger down on External Trigger pin
 ;----------------------------------------------------------------------------;
 ;
-.global trigpb2d
-.func trigpb2d
-trigpb2d:
+.global trigextd
+.func trigextd
+trigextd:
     sbic    0x000B,0        ; 2 cycle ; Status update? (GPIOB)
     ret
-    sbis    0x0012,2        ; Check if bit VPORT0.2 is high
-    rjmp    trigpb2d
+    sbis    EXTPIN          ; Check if external trigger pin is high
+    rjmp    trigextd
 0:
     sbic    0x000B,0        ; 2 cycle ; Status update? (GPIOB)
     ret
-    sbic    0x0012,2        ; Check if bit VPORT0.2 is low
+    sbic    EXTPIN          ; Check if external trigger pin is low
     rjmp    0b
     rjmp    post
 .endfunc
@@ -422,7 +423,7 @@ trigdownCH1:
     subi    r24, 0x83       ; Transform [0x00, 0xff] -> [0x80, 0x7f]
                             ; r24 = (signed)(tlevelo - 3)
 0:
-    lds     r0, 0x0224      ; 2 cycle : r21 = ADCA CH0.RESL
+    lds     r0, CH1ADC      ; 2 cycle : r21 = CH1ADC
     cp      r24, r0         ; 1 cycle ; compare triggervalue with data1
     brge    1f              ; 1 cycle ; next step if tlevelo >= data1
     sbis    0x000B,0        ; 1 cycle ; Status update? (GPIOB)
@@ -432,7 +433,7 @@ trigdownCH1:
 1:
     subi    r24, 0xFA       ; r24 = (signed)(tlevelo + 3)
 2:
-    lds     r0,0x0224       ; 2 cycle : r0 = ADCA CH0.RESL
+    lds     r0,CH1ADC       ; 2 cycle : r0 = CH1ADC
     cp      r24,r0          ; 1 cycle ; compare triggervalue with data2
     brlt    post            ; 1 cycle ; finish if tlevelo < data2
     sbis    0x000B,0        ; 1 cycle ; Status update? (GPIOB)
@@ -454,7 +455,7 @@ trigupCH1:
     subi    r24, 0x7D       ; Transform [0x00, 0xff] -> [0x80, 0x7f]
                             ; r24 = (signed)(tlevelo + 3)
 0:
-    lds     r0, 0x0224      ; 2 cycle : r0 = ADCA CH0.RESL
+    lds     r0,CH1ADC       ; 2 cycle : r0 = CH1ADC
     cp      r24, r0         ; 1 cycle ; compare triggervalue with data1
     brlt    1f              ; 1 cycle ; next step if tlevelo < data1
     sbis    0x000B,0        ; 1 cycle ; Status update? (GPIOB)
@@ -464,7 +465,7 @@ trigupCH1:
 1:
     subi    r24, 0x06       ; r24 = (signed)(tlevelo - 3)
 2:
-    lds     r0,0x0224       ; 2 cycle : r0 = ADCA CH0.RESL
+    lds     r0,CH1ADC       ; 2 cycle : r0 = CH1ADC
     cp      r24,r0          ; 1 cycle ; compare triggervalue with data2
     brge    post            ; 1 cycle ; finish if tlevelo >= data2
     sbis    0x000B,0        ; 1 cycle ; Status update? (GPIOB)
@@ -511,7 +512,7 @@ trigdownCH2:
     subi    r24, 0x83       ; Transform [0x00, 0xff] -> [0x80, 0x7f]
                             ; r24 = (signed)(tlevelo - 3)
 0:
-    lds     r0, 0x0264      ; 2 cycle : r0 = ADCB CH0.RESL
+    lds     r0,CH2ADC       ; 2 cycle : r0 = CH2ADC
     cp      r24, r0         ; 1 cycle ; compare triggervalue with data1
     brge    1f              ; 1 cycle ; next step if tlevelo >= data1
     sbis    0x000B,0        ; 1 cycle ; Status update? (GPIOB)
@@ -521,7 +522,7 @@ trigdownCH2:
 1:
     subi    r24, 0xFA        ; r24 = (signed)(tlevelo + 3)
 2:
-    lds     r0,0x0264       ; 2 cycle : r0 = ADCB CH0.RESL
+    lds     r0,CH2ADC       ; 2 cycle : r0 = CH2ADC
     cp      r24,r0          ; 1 cycle ; compare triggervalue with data2
     brlt    post            ; 1 cycle ; finish if tlevelo < data2
     sbis    0x000B,0        ; 1 cycle ; Status update? (GPIOB)
@@ -543,7 +544,7 @@ trigupCH2:
     subi    r24, 0x7D       ; Transform [0x00, 0xff] -> [0x80, 0x7f]
                             ; r24 = (signed)(tlevelo + 3)
 0:
-    lds     r0,0x0264       ; 2 cycle : r0 = ADCB CH0.RESL
+    lds     r0,CH2ADC       ; 2 cycle : r0 = CH2ADC
     cp      r24,r0          ; 1 cycle ; compare triggervalue with data1
     brlt    1f              ; 1 cycle ; next step if tlevelo < data1
     sbis    0x000B,0        ; 1 cycle ; Status update? (GPIOB)
@@ -553,7 +554,7 @@ trigupCH2:
 1:
     subi     r24, 0x06       ; r24 = (signed)(tlevelo - 3)
 2:
-    lds     r0,0x0264       ; 2 cycle : r0 = ADCB CH0.RESL
+    lds     r0,CH2ADC       ; 2 cycle : r0 = CH2ADC
     cp      r24,r0          ; 1 cycle ; compare triggervalue with data1
     brge    post            ; 1 cycle ; finish if tlevelo >= data2
     sbis    0x000B,0        ; 1 cycle ; Status update? (GPIOB)
@@ -573,9 +574,9 @@ trigupCH2:
 .func slopedownCH1
 slopedownCH1:
     push    r23
-    lds     r0,0x0224       ; 2 cycle : r0 = ADCA CH0.RESL old value
+    lds     r0,CH1ADC       ; 2 cycle : r0 = CH1ADC old value
 0:
-    lds     r23,0x0224      ; 2 cycle : r23 = ADCA CH0.RESL
+    lds     r23,CH1ADC      ; 2 cycle : r23 = CH1ADC
     cp      r0,r23          ; 1 cycle ; determine difference
     mov     r0,r23          ; 1 cycle ; copy new to old
     brlt    2f              ; next if old < new
@@ -585,7 +586,7 @@ slopedownCH1:
     pop     r23
     ret
 2:
-    lds     r23,0x0224      ; 2 cycle : r23 = ADCA CH0.RESL
+    lds     r23,CH1ADC      ; 2 cycle : r23 = CH1ADC
     sub     r0,r23          ; 1 cycle ; determine difference
     cp      r24,r0          ; 1 cycle ; compare with triggervalue
     mov     r0,r23          ; 1 cycle ; copy new to old
@@ -607,9 +608,9 @@ slopedownCH1:
 .func slopeupCH1
 slopeupCH1:
     push    r23
-    lds     r0,0x0224       ; 2 cycle : r0 = ADCA CH0.RESL old value
+    lds     r0,CH1ADC       ; 2 cycle : r0 = CH1ADC old value
 0:
-    lds     r23,0x0224      ; 2 cycle : r1 = ADCA CH0.RESL
+    lds     r23,CH1ADC      ; 2 cycle : r1 = CH1ADC
     cp      r23,r0          ; 1 cycle ; determine difference
     mov     r0,r23          ; 1 cycle ; copy new to old
     brlt    2f              ; next if old > new
@@ -619,7 +620,7 @@ slopeupCH1:
     pop     r23
     ret
 2:
-    lds     r23,0x0224      ; 2 cycle : r1 = ADCA CH0.RESL
+    lds     r23,CH1ADC      ; 2 cycle : r1 = CH1ADC
     sub     r0,r23          ; 1 cycle ; determine difference
     cp      r0,r24          ; 1 cycle ; compare with triggervalue
     mov     r0,r23          ; 1 cycle ; copy new to old
@@ -643,9 +644,9 @@ slopeupCH1:
 .func slopedownCH2
 slopedownCH2:
     push    r23
-    lds     r0,0x0264       ; 2 cycle : r0 = ADCB CH0.RESL old value
+    lds     r0,CH2ADC       ; 2 cycle : r0 = CH2ADC old value
 0:
-    lds     r23,0x0264      ; 2 cycle : r23 = ADCB CH0.RESL
+    lds     r23,CH2ADC      ; 2 cycle : r23 = CH2ADC
     cp      r0,r23          ; 1 cycle ; determine difference
     mov     r0,r23          ; 1 cycle ; copy new to old
     brlt    2f              ; next if old + 3 < new
@@ -655,7 +656,7 @@ slopedownCH2:
     pop     r23
     ret
 2:
-    lds     r23,0x0264      ; 2 cycle : r23 = ADCB CH0.RESL
+    lds     r23,CH2ADC      ; 2 cycle : r23 = CH2ADC
     sub     r0,r23          ; 1 cycle ; determine difference
     cp      r24,r0          ; 1 cycle ; compare with triggervalue
     mov     r0,r23          ; 1 cycle ; copy new to old
@@ -677,9 +678,9 @@ slopedownCH2:
 .func slopeupCH2
 slopeupCH2:
     push    r23
-    lds     r0,0x0264       ; 2 cycle : r0 = ADCB CH0.RESL old value
+    lds     r0,CH2ADC       ; 2 cycle : r0 = CH2ADC old value
 0:
-    lds     r23,0x0264      ; 2 cycle : r23 = ADCB CH0.RESL
+    lds     r23,CH2ADC      ; 2 cycle : r23 = CH2ADC
     cp      r23,r0          ; 1 cycle ; determine difference
     mov     r0,r23          ; 1 cycle ; copy new to old
     brlt    2f              ; next if old > new
@@ -689,7 +690,7 @@ slopeupCH2:
     pop     r23
     ret
 2:
-    lds     r23,0x0264      ; 2 cycle : r23 = ADCB CH0.RESL
+    lds     r23,CH2ADC      ; 2 cycle : r23 = CH2ADC
     sub     r0,r23          ; 1 cycle ; determine difference
     cp      r0,r24          ; 1 cycle ; compare with triggervalue
     mov     r0,r23          ; 1 cycle ; copy new to old
@@ -709,7 +710,7 @@ windowCH1:
     subi    r24, 0x80       ; Transform [0x00, 0xff] -> [0x80, 0x7f]
     subi    r22, 0x80       ; Transform [0x00, 0xff] -> [0x80, 0x7f]
 0:
-    lds     r0, 0x0224      ; 2 cycle : r21 = ADCA CH0.RESL
+    lds     r0, CH1ADC      ; 2 cycle : r21 = CH1ADC
     cp      r24, r0         ; 1 cycle ; compare window1 with data
     brlt    4b              ; 1 cycle ; continue if window1 >= data
     cp      r0,r22          ; 1 cycle ; compare window2 with data
@@ -730,7 +731,7 @@ windowCH2:
     subi    r24, 0x80       ; Transform [0x00, 0xff] -> [0x80, 0x7f]
     subi    r22, 0x80       ; Transform [0x00, 0xff] -> [0x80, 0x7f]
 0:
-    lds     r0, 0x0264      ; 2 cycle : r0 = ADCB CH0.RESL
+    lds     r0, CH2ADC      ; 2 cycle : r0 = CH2ADC
     cp      r24, r0         ; 1 cycle ; compare window1 with data
     brlt    4b              ; 1 cycle ; continue if window1 >= data
     cp      r0,r22          ; 1 cycle ; compare window2 with data

@@ -278,7 +278,5 @@ void Jump_boot(void) {
 	cli();
 	_delay_ms(10);
 	USB.CTRLB &= ~USB_ATTACH_bm;    // disconnects the device from the USB lines
-	_delay_ms(100);
-	wdt_enable(WDTO_30MS);
-	while(1) {}
+	CCPWrite(&RST.CTRL, RST_SWRST_bm);  // Software Reset!
 }

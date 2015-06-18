@@ -21,6 +21,9 @@ email me at: gabriel@gabotronics.com
 #include "mso.h"
 #include "USB\usb_xmega.h"
 
+void LogicDMA(void);
+void DisplayData(uint8_t side, uint8_t page);
+
 //    0   1   2   3   4   5   6   7
 //  |...|...|...|...|...|...|...|...|
 //   ^
@@ -29,10 +32,8 @@ email me at: gabriel@gabotronics.com
 //
 // Display the HEX value of the digital stream
 void HEXSerial(void) {
-    int8_t start,end,i;
-    uint8_t data,d=0,temp5,temp6,temp7;
-    int16_t increment,counter;
-    uint8_t result=0;
+    int8_t start,end;
+    int16_t increment,index;
     // The vertical cursors define the section to decode
     start = M.VcursorA;
     end   = M.VcursorB;
@@ -42,35 +43,34 @@ void HEXSerial(void) {
         end   = 127;
     }
     increment = (end-start);
-    if(start>end) {
-        increment = -(start-end);
-    }
 	increment<<=3;
     if(Srate>=11) {
         increment*=2;
         start=start<<1;
     }
-    temp5 = M.CHDpos;
-    for(temp6=128, temp7=7; temp6; temp6=temp6>>1, temp7--) {
-        counter = (start<<8);
-        if(Srate<11) counter+=(M.HPos<<8);
-        counter+=increment;
-        if(CHDmask&temp6) {
-            for(i=1; i<=32; i++) {
-                data = DC.CHDdata[hibyte(counter)];
-                if(!(i&0x03)) { // Time to check bits when i is multiple of 4
+    uint8_t result;							// Does not need to be initialized
+    uint8_t data,bit=0,yPos,mask;
+    yPos = M.CHDpos>>3;
+    for(mask=0x80; mask; mask=mask>>1) {	// Loop 8 digital channels
+        index = (start<<8);
+        if(Srate<11) index+=(M.HPos<<8);
+        index+=increment;
+        if(CHDmask&mask) {					// Is this channel on?
+            for(uint8_t i=1; i<=32; i++) {	// Scan buffer
+                data = DC.CHDdata[hibyte(index)];
+                if(!(i&0x03)) {				// Time to check bits when i is multiple of 4
                     result<<=1;
-                    if(d>1) result+=1;
-                    d=0;
+                    if(bit) result+=1;
+                    bit=0;
                 }
                 else {
-                    if(testbit(data,temp7)) d++;
+                    if(data&mask) bit++;
                 }
-                counter+=increment;
+                index+=increment;
             }
-            lcd_goto(120,temp5>>3);
+            lcd_goto(120,yPos);				// Print on right edge of the screen
             printhex(result);
-            temp5+=8;
+            yPos++;
         }
     }
 }
@@ -158,7 +158,7 @@ void Sniff(void) {
     clr_display();
     for(i=0; i<2562; i++) *p++=0;   // Erase all data
     Temp.LOGIC.indrx=0; Temp.LOGIC.indtx=0;
-    if(testbit(Trigger, round)) page=0x0F;
+    if(testbit(Trigger, round)) page=0x0F;  // Go to last page
     // Setup
     PR.PRPC  = 0x00;        // Enable PORTC peripherals
     RTC.INTCTRL = 0x01;     // Disable Menu Timeout interrupt
@@ -245,7 +245,6 @@ void Sniff(void) {
     		endpoints[1].in.STATUS &= ~(USB_EP_TRNCOMPL0_bm | USB_EP_BUSNACK0_bm | USB_EP_OVF_bm);
             togglebit(Misc,sacquired);
 		}
-		//WaitRefresh();
         // Display I2C data
         if(M.CHDdecode==i2c) {
             if(testbit(Trigger, round)) {
@@ -308,11 +307,11 @@ void Sniff(void) {
                 }
             }
             if(testbit(MStatus, stop)) {
-                lcd_line(64,8,64,94);
-                lcd_goto(63,12); GLCD_Putchar('S');
-                lcd_goto(63,13); GLCD_Putchar('T');
-                lcd_goto(63,14); GLCD_Putchar('O');
-                lcd_goto(63,15); GLCD_Putchar('P');
+                lcd_line(63,8,63,30);
+                uint8_t *p=Stop;
+                for(uint8_t i=12; i<=15; i++) {   // Print STOP vertically
+                    lcd_goto(62,i); GLCD_Putchar(pgm_read_byte(p++));
+                }
             }
             else lcd_line(64,8,64,127);
             lcd_goto(63,0); GLCD_Putchar(NibbleToChar(page));

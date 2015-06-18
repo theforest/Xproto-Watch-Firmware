@@ -1,14 +1,14 @@
 #include <stdint.h>
 #include <avr/pgmspace.h>
 #include <avr/interrupt.h>
-#include <stdbool.h>
 #include "display.h"
 #include "fonts.h"
 #include "mygccdef.h"
 #include "main.h"
+#include "mso.h"
 
 Disp_data Disp_send;
-uint8_t     u8CursorX, u8CursorY;
+uint8_t   u8CursorX, u8CursorY;
 
 // Small fonts, each character takes 5 nibbles (5 bytes contain 2 characters)
 const uint8_t PROGMEM font[190] = {
@@ -52,8 +52,10 @@ const uint8_t PROGMEM font[190] = {
     0x44, 0xAA, 0xE0, 0x00, 0x00    // 37:  delta   (j)
 };
 
-// System 3x6 (char #22 to #96) 
+// System 3x6 (char #20 to #96) 
 const uint8_t Fonts[] PROGMEM = {
+    0x10,0x3E,0x10, // Line Feed            // 0x14
+    0x10,0x10,0x1E, // Carriage Return      // 0x15
     0x30,0x0C,0x02, // long /               // 0x16
     0x38,0x20,0x38, // u                    // 0x17
     0x28,0x3C,0x08,//0x0A,0x0F,0x02, // up arrow             // 0x18
@@ -344,8 +346,8 @@ void fillRectangle(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t c) {
 // Original from http://www.sunshine2k.de/coding/java/TriangleRasterization/TriangleRasterization.html
 void fillTriangle(uint8_t x1,uint8_t y1,uint8_t x2,uint8_t y2,uint8_t x3,uint8_t y3, uint8_t c) {
 	uint8_t t1x,t2x,y,minx,maxx,t1xp,t2xp;
-	bool changed1 = false;
-	bool changed2 = false;
+	uint8_t changed1 = 0;
+	uint8_t changed2 = 0;
 	int8_t signx1,signx2,dx1,dy1,dx2,dy2;
 	uint8_t e1,e2;
     // Sort vertices
@@ -363,11 +365,11 @@ void fillTriangle(uint8_t x1,uint8_t y1,uint8_t x2,uint8_t y2,uint8_t x3,uint8_t
 	
 	if (dy1 > dx1) {   // swap values
         SWAP(dx1,dy1);
-		changed1 = true;
+		changed1 = 1;
 	}
 	if (dy2 > dx2) {   // swap values
         SWAP(dy2,dx2);
-		changed2 = true;
+		changed2 = 1;
 	}
 	
 	e2 = (uint8_t)(dx2>>1);
@@ -425,8 +427,8 @@ void fillTriangle(uint8_t x1,uint8_t y1,uint8_t x2,uint8_t y2,uint8_t x3,uint8_t
  
 	if (dy1 > dx1) {   // swap values
         SWAP(dy1,dx1);
-		changed1 = true;
-	} else changed1=false;
+		changed1 = 1;
+	} else changed1=0;
 	
 	e1 = (uint8_t)(dx1>>1);
 	
@@ -586,7 +588,7 @@ Print a char on the LCD
 void GLCD_Putchar(char u8Char) {
     uint16_t pointer;
 	uint8_t data,u8CharColumn=0;
-	pointer = (unsigned int)(Fonts)+(u8Char-22)*(3);
+	pointer = (unsigned int)(Fonts)+(u8Char-20)*(3);
     if(u8Char!='\n') {
        	/* Draw a char */
     	while (u8CharColumn < 3)	{
@@ -623,8 +625,6 @@ Print a char on the LCD
 		u8Char = char to display
 -------------------------------------------------------------------------------*/
 void GLCD_Bigchar (char u8Char) {
-	uint8_t i=0;
-    uint16_t pointer;
 	if(u8Char=='.') {           // Small point to Save space
 		write_display (0x60);
 		write_display (0x60);
@@ -641,7 +641,8 @@ void GLCD_Bigchar (char u8Char) {
 		u8CursorX+=6;
     }
 	else {                      // Number
-		pointer = (unsigned int)(BigFonts)+(u8Char)*20;
+        uint8_t i=0;
+        uint16_t pointer = (unsigned int)(BigFonts)+(u8Char)*20;
 		// Upper side
 		u8CursorY--;
 		while (i < 10) { write_display (pgm_read_byte_near(pointer++)); i++; }
@@ -710,8 +711,8 @@ void lcd_put5x8 (const char *ptr) {
 void printN(uint8_t Data) {
     uint8_t d=0x30;
 	while (Data>=100)	{ d++; Data-=100; }
-    if(d!=0x30) GLCD_Putchar(d);
-    d=0x30;
+    if(d>0x30) GLCD_Putchar(d);
+	d=0x30;
 	while (Data>=10)	{ d++; Data-=10; }
     GLCD_Putchar(d);
     GLCD_Putchar(Data+0x30);
@@ -738,7 +739,7 @@ void printV(int16_t Data, uint8_t gain) {
 // Print Fixed point Number with 5 digits
 // or Print Long integer with 7 digits
 void printF(uint8_t x, uint8_t y, int32_t Data) {
-	uint8_t D[8]={0,0,0,0,0,0,0,0},point=0,i;
+	uint8_t D[8]={0,0,0,0,0,0,0,0},point=0;
     lcd_goto(x,y);
     if(Data<0) {
         Data=-Data;
@@ -750,7 +751,6 @@ void printF(uint8_t x, uint8_t y, int32_t Data) {
         else GLCD_Putchar(' ');
     }
     if(testbit(Misc,negative)) {   // 7 digit display
-	    //if(Data>=9999999L) n = 9999999L;
         point=3;
     }
     else {  // 4 digit display
@@ -770,7 +770,7 @@ void printF(uint8_t x, uint8_t y, int32_t Data) {
 	    }
     }
     
-    i=7;
+    uint8_t i=7;
     do {    // Decompose number
         uint32_t power;
         power=pgm_read_dword_near(Powersof10+i);

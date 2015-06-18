@@ -2,9 +2,9 @@
 #include <stdint.h>
 
 typedef struct {
-    uint8_t halfsec;             // Half seconds.   [0-119]
+    uint8_t sec;                 // Seconds.        [0-59]
     uint8_t min;                 // Minutes.        [0-59]
-    uint8_t hour;                // Hours.          [0-23]
+    uint8_t hour;                // Hours.          [0-11]
     uint8_t mday;                // Day.            [0-30]
     uint8_t mon;                 // Month.          [0-11]
     uint8_t year;                // Year since 2000

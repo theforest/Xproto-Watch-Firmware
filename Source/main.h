@@ -25,26 +25,9 @@ email me at: gabriel@gabotronics.com
 #include "asmutil.h"
 #include "data.h"
 #include "display.h"
-
-// PORT DEFINITIONS
-#define LEDGRN      1           // PORTD
-#define LEDRED      2           // PORTD
-#define ANPOW       6           // PORTB
-#define LOGIC_DIR   7           // PORTB
-
-#define ONGRN()         setbit(VPORT1.OUT, LEDGRN)
-#define OFFGRN()        clrbit(VPORT1.OUT, LEDGRN)
-#define ONRED()         setbit(VPORT1.OUT, LEDRED)
-#define OFFRED()        clrbit(VPORT1.OUT, LEDRED)
-#define ANALOG_ON()     setbit(VPORT0.OUT, ANPOW)
-#define ANALOG_OFF()    clrbit(VPORT0.OUT, ANPOW)
-#define LOGIC_DIROUT()  clrbit(VPORT0.OUT, LOGIC_DIR)
-#define LOGIC_DIRIN()   setbit(VPORT0.OUT, LOGIC_DIR)
-#define EXTCOMM()       (PORTD.OUTTGL = 0x10)
-
+#include "hardware.h"
 
 #define WaitDisplay() while(testbit(LCD_CTRL,LCD_CS))
-
 
 // Global variables, using GPIO for optimized access
 #define Srate       GPIO0   // Sampling rate
@@ -69,16 +52,24 @@ email me at: gabriel@gabotronics.com
 
 // WOptions         (GPIOE)
 #define update      0       // Refresh screen
-#define tick        1       // Bit gets flipped on every screen  refresh
+#define tick        1       // Bit gets flipped on every screen refresh
 #define military    2       // 12 or 24 hour
 #define seconds     3       // Display seconds
 
-
 // CH1ctrl bits    (GPIO1)
+#define chon        0       // Channel on
+#define x10         1       // x10 probe
+#define lowbatt     2       // VCC is below 3.15V
+#define acdc        3       // AC/DC Select
+#define chinvert    4       // Invert channel
+#define chaverage   5       // Average samples
+#define chmath      6       // math (Subtract or Multiply active)
+#define submult     7       // Subtract or Multiply
+
 // CH2ctrl bits    (GPIO2)
 #define chon        0       // Channel on
 #define x10         1       // x10 probe
-#define bwlimit     2       // Bandwidth Limit
+//#define       2      
 #define acdc        3       // AC/DC Select
 #define chinvert    4       // Invert channel
 #define chaverage   5       // Average samples
@@ -169,7 +160,7 @@ email me at: gabriel@gabotronics.com
 #define triggered   5       // Scope triggered
 #define vdc         6       // Calculate VDC
 #define vp_p        7       // Calculate VPP
-                            // Calculate frequency in other bits are 0
+                            // Calculate frequency if other bits are 0
 
 // Misc             (GPIOC) // Miscellaneous bits
 #define keyrep      0       // Automatic key repeat
@@ -178,7 +169,7 @@ email me at: gabriel@gabotronics.com
 #define redraw      3       // Redraw screen
 #define sacquired   4       // Data has been acquired (for slow sampling)
 #define slowacq     5       // Acquired one set of samples a slow sampling rates
-#define lowbatt     6       // VCC is below 3.15V
+#define hour_pm     6       // VCC is below 3.15V
 #define autosend    7       // Continuously send data to UART
 
 // Key              (GPIOF) // Key input
@@ -219,6 +210,10 @@ typedef union {
         int8_t      CH1[512];		// CH1 Temp data
         int8_t      CH2[512];		// CH2 Temp data
         uint8_t     CHD[512];       // CHD Temp data
+        union {
+            int16_t Vdc[2];             // Channel 1 and Channel 2 DC
+            uint32_t Freq;
+        } METER;        
     } IN;
     struct {
         uint8_t AWGTemp1[256];
@@ -253,6 +248,7 @@ typedef union {
 enum protocols { spi, i2c, rs232, irda, onewire, midi };
 
 typedef struct {
+//  Type        Name            Index Description
     uint8_t     CH1gain;        // 12 Channel 1 gain
     uint8_t     CH2gain;        // 13 Channel 2 gain
     uint8_t     HPos;           // 14 Horizontal Position

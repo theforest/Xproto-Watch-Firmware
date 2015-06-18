@@ -27,17 +27,13 @@ email me at: gabriel@gabotronics.com
         Programmer mode
         If no sleeptime, check if menu timeout works
         Check if pretrigger samples completed with DMA (last part of mso.c)
-        Check serial interface
-        New Meter functions: Pulse Counter, Period Measure, Stopwatch
         Make Srate signed, so tests like Srate>=11 become Srate>=0
         Share buffer between CH1 and CH2
         MSO Logic Analyzer more SPS, with DMA
-        RED LED too bright
         Force trigger, Trigger timeout in menu
 		USB Frame counter
         Disable gain on CH1 if Gain=1, to allow simultaneous sampling
         Channel math in meter mode
-        Sometimes the display does not shut off when the device enters sleep
 		USE NVM functions from BOOT */
 // TODO When 64k parts come out:
 /*      Vertical zoom
@@ -45,13 +41,12 @@ email me at: gabriel@gabotronics.com
         Terminal mode
         FFT waterfall
         Bigger fonts
-        Specialized firmware for Scope / AWG / Logic Analyzer
         Setting profiles
         Continuous data to USB from ADC
         Independent CH1 and CH2 Frequency measurements, up to 1Mhz
         1v/octave (CV/Gate) AWG control
         RMS
-        Arbitrary expression on AWG
+        Arbitrary math expression on AWG
         DAC Calibration
 	    Use DMA for USART PC transfers
         Dedicated Bode plots
@@ -64,17 +59,19 @@ email me at: gabriel@gabotronics.com
 
 /* Hardware resources:
     Timers:
-        RTC   Clock for sleep timeout
+        RTC   Half second timer
         TCC0  Frequency counter time keeper
-        TCC0L Controls the auto trigger - Source is Event CH7
-        TCC0H Auto key repeat           - Source is Event CH7
+            Also used as split timer, source is Event CH7 (40.96mS)
+            TCC0L Controls the auto trigger
+            TCC0H Auto key repeat
         TCC1  Counts post trigger samples
               UART sniffer time base
               Frequency counter low 16bits
-        TCD0L 0.04096mS period - 24.4140625 Hz - Source for Event CH7
-	    TCD0H Controls LCD refresh rate
+        TCD0  Split timer, source is Event CH6 (1.024ms)
+            TCD0L 40.96mS period - 24.4140625 Hz - Source for Event CH7
+	        TCD0H Controls LCD refresh rate
 	    TCD1  Overflow used for AWG
-        TCE0  Controls Interrupt ADC, srate: 6, 7, 8, 9, 10
+        TCE0  Controls Interrupt ADC (srate >= 11), srate: 6, 7, 8, 9, 10
               Fixed value for slow sampling
               Frequency counter high 16bits
         TCE1L 
@@ -83,7 +80,7 @@ email me at: gabriel@gabotronics.com
     Events:
 	    CH0 TCE0 overflow used for ADC
 	    CH1 ADCA CH0 conversion complete
-        CH2 EXT Trigger or logic pin for freq. measuring
+        CH2 Input pin for frequency measuring
         CH3 TCD1 overflow used for DAC
         CH4 TCC0 overflow used for freq. measuring
         CH5 TCC1 overflow used for freq. measuring
@@ -93,10 +90,10 @@ email me at: gabriel@gabotronics.com
 	    CH0 ADC CH0  / SPI Sniffer MOSI / UART Sniffer
 	    CH1 ADC CH1  / SPI Sniffer MISO
 	    CH2 Port CHD / Display
-	    CH3 DAC
+	    CH3 AWG DAC
     USART:
-	    USARTD0 for OLED
-	    USARTC0 for sniffer
+	    USARTD0 for Memory LCD
+	    USARTC0 for Sniffer
 	    USARTE0 for External Interface Port
 	RAM:
 	    1024:   Display buffer
@@ -155,10 +152,11 @@ const char optionmenutxt[][22] PROGMEM = {           // Menus:
   
 /*
 
-turn off JTAG
+turn off JTAG !!!
 
 
 FUSES = {
+    .FUSEBYTE0 = 0xFF,  // JTAG - Not used
     .FUSEBYTE1 = 0x00,  // Watchdog Configuration
     .FUSEBYTE2 = 0xBD,  // Reset Configuration
     .FUSEBYTE4 = 0xF7,  // Start-up Configuration
@@ -169,13 +167,13 @@ FUSES = {
     WDP = 8CLK
     BOOTRST = BOOTLDR
     TOSCSEL = XTAL
-    BODPD = SAMPLED
+    BODPD = OFF
     RSTDISBL = [ ]
     SUT = 4MS
     WDLOCK = [ ]
-    BODACT = CONTINUOUS
+    BODACT = SAMPLED
     EESAVE = [ ]
-    BODLVL = 2V8    */
+    BODLVL = 2V6    */
 
 uint8_t SP_ReadCalibrationByte(uint8_t location);
 static inline void Restore(void);
@@ -191,20 +189,23 @@ NVMVAR M;
 uint8_t EEMEM EESleepTime = 32;     // Sleep timeout in minutes
 uint8_t EEMEM EEDACgain   = 0;      // DAC gain calibration
 uint8_t EEMEM EEDACoffset = 0;      // DAC offset calibration
+uint8_t EEMEM EECalibrated = 0xFF;  // Offset calibration done
 
 //static void CalibrateDAC(void);
 void SimpleADC(void);
 static inline void LoadEE(void);                  // Load settings from EEPROM
-
+void CalibrateOffset(void);
+void CalibrateGain(void);
+    
 int main(void) {
-    // POWER REDUCTION: Stop unused peripherals - Stop everything but RTC and DMA
-    PR.PRGEN = 0b01011010;          // Stop: USB, AES, EBI, EVSYS, only RTC and DMA on
+    PR.PRGEN = 0b01011000;          // Stop: USB, AES, EBI, EVSYS, only RTC and DMA on
     PR.PRPA  = 0b00000111;          // Stop: DAC, ADC, AC
     PR.PRPB  = 0b00000111;          // Stop: DAC, ADC, AC
-    PR.PRPC  = 0b01111111;          // Stop: TWI, USART0, USART1, SPI, HIRES, TC1, TC0
-    PR.PRPD  = 0b01101111;          // Stop: TWI,       , USART1, SPI, HIRES, TC1, TC0
-    PR.PRPE  = 0b01111111;          // Stop: TWI, USART0, USART1, SPI, HIRES, TC1, TC0
-    PR.PRPF  = 0b01111111;          // Stop: TWI, USART0, USART1, SPI, HIRES, TC1, TC0
+    PR.PRPC  = 0b11111111;          // Stop: TWI, USART0, USART1, SPI, HIRES, TC1, TC0
+    PR.PRPD  = 0b11101111;          // Stop: TWI,       , USART1, SPI, HIRES, TC1, TC0
+    PR.PRPE  = 0b11111111;          // Stop: TWI, USART0, USART1, SPI, HIRES, TC1, TC0
+    PR.PRPF  = 0b11111110;          // Stop: TWI, USART0, USART1, SPI, HIRES, TC1, TC0
+    NVM.CTRLB = 0b00001100;         // EEPROM Mapping, Turn off bootloader flash
     // PORTS CONFIGURATION
     PORTA.DIR       = 0b00101110;   // 1.024V, BATTSENSE, x, CH1, x, x, x, 2.048V
     PORTA.PIN4CTRL  = 0x07;         // Input Disable on pin PA4
@@ -239,15 +240,25 @@ int main(void) {
 	//GLCD_setting();
     //tiny_printp(50,7,VERSION);
     LoadEE();
+    CPU_Slow();
     
     DMA.CTRL          = 0x80;       // Enable DMA, single buffer, round robin
     
+    // TIME CONTROL!
     CLK.RTCCTRL = CLK_RTCSRC_TOSC_gc | CLK_RTCEN_bm;    // Set 1.024kHz from external 32.768kHz crystal oscillator
-    RTC.PER = 255;                  // 512/2-1 = 0.5 seconds
+    RTC.PER = 511;                  // 1024/2-1 = 1 seconds
+    RTC.COMP = 255;
     RTC.CTRL = 0x02;                // Prescale by 2 -> 512Hz
-    RTC.INTCTRL = 0x01;             // Generate low level interrupts (Overflow)
+    RTC.INTCTRL = 0x05;             // Generate low level interrupts (Overflow and Compare)
+    EVSYS.CH4MUX    = 0x08;         // Event CH4 = RTC overflow (every second)
+    TCF0.PER = 43199;               // 43200 seconds = 12 hours
+    TCF0.CTRLA = 0x0C;              // Source is Event CH4
+    TCF0.INTCTRLA = 0x01;           // 12 hour interrupt, low level interrupt
+    
     PMIC.CTRL = 0x07;               // Enable High, Medium and Low level interrupts
     sei();                          // Enable global interrupts    
+
+    if(eeprom_read_byte(&EECalibrated)) CalibrateOffset();
 
 /*
     uint8_t i;
@@ -320,19 +331,16 @@ int main(void) {
                 break;
                 case 2:     // Oscilloscope Menu
                     if(testbit(Key,K1)) {
-                        ANALOG_ON();
-                        CPU_Fast();
-                        RTC.INTCTRL = 0x00;     // Disable low level interrupts (Compare)
+                        AnalogOn();
+                        RTC.INTCTRL = 0x00;     // Disable RTC interrupts
                         // 1Hz Memory LCD EXTCOMM
-						PR.PRPD  = 0x6C;        // Stop: TWI,       , USART1, SPI, HIRES
                         TCD0.CTRLB = 0b00010000;            // Enable HCMPENA, pin4
                         TCD0.CCAH = 128;                      // Automatic EXTCOMM with Timer D0                        
                         MSO();              // go to MSO
                         TCD0.CTRLB = 0;
                         TCD0.CCAH = 0;
-                        RTC.INTCTRL = 0x01;
-                        CPU_Slow();
-                        ANALOG_OFF();
+                        RTC.INTCTRL = 0x05;
+                        AnalogOff();
                         old_item=0; step=15; from=-101;
                     }                        
                 break;
@@ -382,7 +390,7 @@ int main(void) {
         WaitDisplay();
         SLEEP.CTRL = SLEEP_SMODE_PSAVE_gc | SLEEP_SEN_bm;
         asm("sleep");
-        asm("nop");        
+        asm("nop");
     }        
     return 0;
 }
@@ -475,16 +483,48 @@ void CPU_Fast(void) {
         tiny_printp(0,7,PSTR("NO XT"));
     }
     USARTD0.BAUDCTRLA = FBAUD32M;	    // SPI clock rate for display, CPU is at 32MHz    
+    NVM.CTRLB = 0b00001100;             // EEPROM Mapping, Turn off bootloader flash, Turn on EEPROM
 }
 
 void CPU_Slow(void) {
     OSC.CTRL |= OSC_RC2MEN_bm;  // Enable internal 2MHz
     delay_ms(2);
     CCPWrite(&CLK.CTRL, CLK_SCLKSEL_RC2M_gc);    // Switch to 2MHz clock
-    OSC.CTRL &= ~OSC_PLLEN_bm;
+    OSC.CTRL = OSC_RC2MEN_bm;
     OSC.PLLCTRL = 0;
     OSC.XOSCCTRL = 0;
-    USARTD0.BAUDCTRLA = FBAUD2M;	    // SPI clock rate for display, CPU is at 32MHz
+    USARTD0.BAUDCTRLA = FBAUD2M;	    // SPI clock rate for display, CPU is at 2MHz
+    NVM.CTRLB = 0b00001110;             // EEPROM Mapping, Turn off bootloader flash, Turn off EEPROM
+}
+
+void AnalogOn(void) {
+    ANALOG_ON();
+    // Power reduction: Stop unused peripherals
+    PR.PRGEN = 0x18;        // Stop: AES, EBI
+    PR.PRPA  = 0x04;        // Stop: DAC
+    PR.PRPB  = 0x01;        // Stop: AC
+    PR.PRPC  = 0x7C;        // Stop: TWI, USART0, USART1, SPI, HIRES
+    PR.PRPD  = 0x6C;        // Stop: TWI,       , USART1, SPI, HIRES
+    PR.PRPE  = 0x6C;        // Stop: TWI,       , USART1, SPI, HIRES
+    CPU_Fast();
+}
+
+void AnalogOff(void) {
+    ANALOG_OFF();
+    DMA.CTRL          = 0x00;       // Disable DMA
+    DMA.CTRL          = 0x40;       // Reset DMA
+    ADCA.CTRLA        = 0x00;       // Disable ADC
+    ADCB.CTRLA        = 0x00;       // Disable ADC
+    // POWER REDUCTION: Stop unused peripherals - Stop everything but RTC and DMA
+    PR.PRGEN = 0b01011000;          // Stop: USB, AES, EBI, EVSYS, only RTC and DMA on
+    PR.PRPA  = 0b00000111;          // Stop: DAC, ADC, AC
+    PR.PRPB  = 0b00000111;          // Stop: DAC, ADC, AC
+    PR.PRPC  = 0b11111111;          // Stop: TWI, USART0, USART1, SPI, HIRES, TC1, TC0
+    PR.PRPD  = 0b11101111;          // Stop: TWI,       , USART1, SPI, HIRES, TC1, TC0
+    PR.PRPE  = 0b11111111;          // Stop: TWI, USART0, USART1, SPI, HIRES, TC1, TC0
+    PR.PRPF  = 0b11111110;          // Stop: TWI, USART0, USART1, SPI, HIRES, TC1, TC0
+    CPU_Slow();
+    DMA.CTRL          = 0x80;       // Enable DMA
 }
 
 // From Application Note AVR1003
@@ -538,16 +578,17 @@ uint8_t SP_ReadCalibrationByte(uint8_t location) {
 }
 
 // Calibrate offset, inputs must be connected to ground
-void Calibrate(void) {
+void CalibrateOffset(void) {
     int8_t  *q1, *q2, avrg8;  // temp pointers to signed 8 bits
     uint8_t i,j,s=0;
     int16_t avrg1, avrg2;
     Key=0;
     clr_display();
     lcd_putsp(PSTR("DISCONNECT CH1,CH2"));
-    tiny_printp(116,7,PSTR("GO"));
+    tiny_printp(116,15,PSTR("GO"));
     dma_display(); WaitDisplay();
     while(!Key);
+    AnalogOn();
     if(testbit(Key,K3)) {
         clr_display();
 	    for(Srate=0; Srate<8; Srate++) {	// Cycle thru first 8 srates
@@ -566,15 +607,16 @@ void Calibrate(void) {
             	    avrg2+= (*q2++);
                 } while(++j);
                 avrg8=avrg1>>8;
+                ONGRN();
                 eeprom_write_byte((uint8_t *)&offset8CH1[Srate][i], avrg8);
                 j = 32+avrg8; // add 32 to center on screen
                 if(j<64) lcd_line(s,32,s,j);
-                if(Srate) {
-                    avrg8=avrg2>>8;
-                    eeprom_write_byte((uint8_t *)&offset8CH2[Srate-1][i], avrg8);
-                    j = 32+avrg8; // add 32 to center on screen
-                    if(j<64) lcd_line(s+64,32,s+64,j);
-                }
+                else ONRED();
+                avrg8=avrg2>>8;
+                eeprom_write_byte((uint8_t *)&offset8CH2[Srate][i], avrg8);
+                j = 32+avrg8; // add 32 to center on screen
+                if(j<64) lcd_line(s+64,32,s+64,j);
+                else ONRED();
                 dma_display(); WaitDisplay();
             } while(i--);
         }
@@ -583,16 +625,69 @@ void Calibrate(void) {
         avrg2=0;
         ADCA.CTRLB = 0x10;          // signed mode, no free run, 12 bit right adjusted
         ADCA.PRESCALER = 0x07;      // Prescaler 512 (500kHZ ADC clock)
+        ADCB.CTRLB = 0x10;          // signed mode, no free run, 12 bit right adjusted
+        ADCB.PRESCALER = 0x07;      // Prescaler 512 (500kHZ ADC clock)
         i=0;
         do {
             ADCA.CH0.CTRL     = 0x83;   // Start conversion, Differential input with gain
-            ADCA.CH1.CTRL     = 0x83;   // Start conversion, Differential input with gain
-            _delay_us(400);
+            ADCB.CH0.CTRL     = 0x83;   // Start conversion, Differential input with gain
+            delay_ms(1);
             avrg1+= (int16_t)ADCA.CH0.RES;  // Measuring 0V, should not overflow 16 bits
-            avrg2+= (int16_t)ADCA.CH1.RES;  // Measuring 0V, should not overflow 16 bits
+            avrg2+= (int16_t)ADCB.CH0.RES;  // Measuring 0V, should not overflow 16 bits
         } while(++i);
         eeprom_write_word((uint16_t *)&offset16CH1, avrg1/*+0x08*/);
         eeprom_write_word((uint16_t *)&offset16CH2, avrg2/*+0x08*/);
+        eeprom_write_byte(&EECalibrated, 0);    // Calibration complete!
+    }
+    Key=0;
+    AnalogOff();
+}
+
+// Calibrate gain, inputs must be connected to 4.000V
+void CalibrateGain(void) {
+    uint8_t i,j,s=0;
+    static int32_t avrg1, avrg2;
+    int16_t offset;
+    #ifndef NODISPLAY
+        Key=0;
+        clr_display();
+        lcd_putsp(PSTR("NOW CONNECT 4.000V"));
+        tiny_printp(116,7,PSTR("GO"));
+        dma_display();
+        while(!Key);
+    #else
+        setbit(Key,K3);
+    #endif
+    if(testbit(Key,K3)) {
+        clr_display();
+        // Calculate offset for Meter in VDC
+        avrg1=0;
+        avrg2=0;
+        ADCA.CTRLB = 0x90;          // signed mode, no free run, 12 bit right adjusted
+        ADCA.PRESCALER = 0x07;      // Prescaler 512 (500kHZ ADC clock)
+        ADCB.CTRLB = 0x90;          // signed mode, no free run, 12 bit right adjusted
+        ADCB.PRESCALER = 0x07;      // Prescaler 512 (500kHZ ADC clock)
+        i=0;
+        do {
+            ADCA.CH0.CTRL     = 0x83;   // Start conversion, Differential input with gain
+            ADCB.CH0.CTRL     = 0x83;   // Start conversion, Differential input with gain
+            delay_ms(1);
+            avrg1-= (int16_t)ADCA.CH0.RES;
+            avrg2-= (int16_t)ADCB.CH0.RES;
+        } while(++i);
+        // Vcal = 4V
+        // Amp gain = 0.18
+        // ADC Reference = 1V
+        // 12 bit signed ADC -> Max = 2047
+        // ADC cal = 4*.18*2047*256 = 377303
+        // ADCcal = ADCmeas * (2048+cal)/2048
+		offset=(int16_t)eeprom_read_word((uint16_t *)&offset16CH1);      // CH1 Offset Calibration
+		avrg1+=offset;
+        avrg1 = (377303*2048l-avrg1*2048)/avrg1;
+        eeprom_write_byte((uint8_t *)&gain8CH1, avrg1);
+		offset=(int16_t)eeprom_read_word((uint16_t *)&offset16CH2);      // CH2 Offset Calibration
+		avrg2+=offset;
+        eeprom_write_byte((uint8_t *)&gain8CH2, avrg2);
     }
     Key=0;
 }
@@ -604,6 +699,7 @@ void SimpleADC(void) {
     StartDMAs();
 	_delay_ms(16);
     ADCA.CTRLB = 0x14;          // Stop free run of ADC (signed mode, no free run, 8 bit)
+    ADCB.CTRLB = 0x14;          // Stop free run of ADC (signed mode, no free run, 8 bit)
     // Disable DMAs
     clrbit(DMA.CH0.CTRLA, 7);
     clrbit(DMA.CH2.CTRLA, 7);
@@ -824,5 +920,5 @@ void delay_ms(uint16_t n) {
         else {              // Running at 32MHz
             _delay_us(999);
         }
-    }        
-}    
+    }
+}

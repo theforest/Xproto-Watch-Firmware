@@ -26,6 +26,8 @@ int8_t Sine(int8_t angle);
 int8_t Cosine(int8_t angle);
 uint8_t firstdayofmonth(time_var *timeptr);
 void findweekday(time_var *timeptr);
+void SyncTime(void);
+void SyncTimer(void);
 
 // 60 value sine table
 const int8_t SIN60[] PROGMEM = {
@@ -61,13 +63,13 @@ const char days[][4] PROGMEM = {           // Days of the week, Jan-1-2000 was S
 };
 
 time_var now = {
-    0,          // halfsec  Half Seconds [0-119]
-    0,          // min      Minutes      [0-59]
-    12,         // hour     Hours        [0-23]
-    22,         // mday     Day          [0-30]  1st day of the month is 0
-    2,          // mon      Month        [0-11]  January is 0
-    14,         // year     Year since 2000
-    1,          // wday     Day of week  [0-6]   Saturday is 0
+    0,          // sec      Seconds      [0-59]
+    41,         // min      Minutes      [0-59]
+    23,         // hour     Hours        [0-23]
+    17,         // mday     Day          [0-30]  1st day of the month is 0
+    5,          // mon      Month        [0-11]  January is 0
+    15,         // year     Year since 2000
+    4,          // wday     Day of week  [0-6]   Saturday is 0
 };
 
 uint8_t Selected=0;   // Selected item to change
@@ -97,45 +99,70 @@ uint8_t options;    // Daylight saving time
 // process. The temperature is assumed to not vary widely within a one-minute period.
 
 
-
-// RTC Compare
-ISR(RTC_COMP_vect) {
-    VPORT1.OUT = 0;         // Turn off LEDs
-    RTC.INTCTRL = 0x01;     // Generate low level interrupts (Overflow)
+// RTC Compare, occurs every 1s, phase 180
+ISR(RTC_COMP_vect, ISR_NAKED) { // Naked ISR (No need to save registers)
+    EXTCOMML();              // LCD polarity inversion
+    asm("reti");
 }
 
-// RTC Overflow, occurs every 500ms
-ISR(RTC_OVF_vect) {
-    uint16_t comp;
-    SLEEP.CTRL = 0x00;
-    EXTCOMM();              // LCD polarity inversion
-    now.halfsec++;
-    if(now.halfsec>=120) {                      // One minute
-        now.halfsec=0;
-        now.min++;
-        if(now.min>=60) {                       // One hour
-            now.min=0;
-            now.hour++;
-            if(now.hour>=24) {                  // One day
-                now.hour=0;
-                now.mday++;
-                now.wday++;
-                if(now.wday>=7) now.wday=0;
-                uint8_t daysinmonth;
-                daysinmonth = pgm_read_byte_near(monthDays+now.mon);
-                if (LEAP_YEAR(now.year)) daysinmonth++;
-                if(now.mday>=daysinmonth) {     // One month
-                    now.mday=0;
-                    now.mon++;
-                    if(now.mon>=12) {           // One year
-                        now.mon=0;
-                        now.year++;
-                    }
-                }
-                
+// RTC Overflow, occurs every 1s, phase 0
+ISR(RTC_OVF_vect, ISR_NAKED) { // Naked ISR (No need to save registers)
+    EXTCOMMH();                 // Changing a bit in a VPORT does not change the the Status Register either
+    asm("reti");
+}
+
+// 12 Hour interrupt
+ISR(TCF0_OVF_vect) {
+    if(testbit(Misc, hour_pm)) {     // One day
+        now.mday++;
+        now.wday++;
+        if(now.wday>=7) now.wday=0;
+        uint8_t daysinmonth;
+        daysinmonth = pgm_read_byte_near(monthDays+now.mon);
+        if (LEAP_YEAR(now.year)) daysinmonth++;
+        if(now.mday>=daysinmonth) {     // One month
+            now.mday=0;
+            now.mon++;
+            if(now.mon>=12) {           // One year
+                now.mon=0;
+                now.year++;
             }
         }
     }
+    togglebit(Misc, hour_pm);
+}
+
+// 1 Minute interrupt
+ISR(TCF0_CCA_vect) {
+    TCF0.CCA+=60;   // Interrupt on next minute
+    if(TCF0.CCA>43199) TCF0.CCA=59;
+    now.sec=0;
+    now.min++;
+    if(now.min>=60) {                       // One hour
+        now.min=0;
+        now.hour++;
+        if(now.hour>=12) now.hour=0;
+    }
+    setbit(WOptions,update);
+}
+
+// Sync variables from TCF0
+void SyncTime(void) {
+    uint16_t TotalSeconds;
+    now.min=0;
+    now.hour=0;
+    TotalSeconds = TCF0.CNT;
+    while (TotalSeconds>=3600)	{ now.hour++; TotalSeconds-=3600; }
+    while (TotalSeconds>=60)	{ now.min++; TotalSeconds-=60; }
+    now.sec=TotalSeconds;
+}
+
+// Sync TCF0 from variables
+void SyncTimer(void) {
+    cli();
+    TCF0.CNT = (now.hour*3600)+(now.min*60)+now.sec;
+    TCF0.CCA = (now.hour*3600)+((now.min+1)*60)-1;
+    sei();
 }
 
 // 60 values -> 2*PI
@@ -157,29 +184,29 @@ int8_t Cosine(int8_t angle) {
 void face0(void) {
     uint8_t n,d=0;
     if(testbit(WOptions,seconds) || Selected) {
-        if(!testbit(now.halfsec,0) || Selected!=SECOND ) {  // Flash when changing
-            n=now.halfsec>>1;
+        if(SECPULSE() || Selected!=SECOND ) {  // Flash when changing
+            n=now.sec;
             while (n>=10) { d++; n-=10; }
             bitmap(104,10,(int16_t)pgm_read_word(sDIGITS+d));
             bitmap(117,10,(int16_t)pgm_read_word(sDIGITS+n));
         }
         // Only draw seconds
-//        if(now.halfsec!=0 && !testbit(WOptions,update)) return;
+//        if(now.sec!=0 && !testbit(WOptions,update)) return;
     }        
     bitmap(118,0,BELL);
     bitmap(2,0,BATTERY);
     lcd_goto(74,0);
     lcd_put5x8(PSTR("8:00 AM"));
-    if(!testbit(now.halfsec,0) || Selected!=HOUR ) {  // Flash when changing
+    if(SECPULSE() || Selected!=HOUR ) {  // Flash when changing
         n=now.hour; 
-        if(n>=12) { n-=12; bitmap(117,8,PM); }
+        if(testbit(Misc, hour_pm)) bitmap(117,8,PM);
         else bitmap(105,8,AM);
         if(n==0) n=12;
         if(n>=10) { n-=10; bitmap(0,8,DIGI1); }
         bitmap(25,8,(int16_t)pgm_read_word(DIGITS+n));
     }
     bitmap(49,8,DOTS);
-    if(!testbit(now.halfsec,0) || Selected!=MINUTE ) {  // Flash when changing
+    if(SECPULSE() || Selected!=MINUTE ) {  // Flash when changing
         n=now.min; d=0;
         while (n>=10) { d++; n-=10; }
         bitmap(55,8,(int16_t)pgm_read_word(DIGITS+d));
@@ -188,24 +215,29 @@ void face0(void) {
     // Date
     n=now.wday;
     bitmap(3,3,(int16_t)pgm_read_word(mWEEK+n));
-    if(!testbit(now.halfsec,0) || Selected!=MONTH ) {  // Flash when changing
+    if(SECPULSE() || Selected!=MONTH ) {  // Flash when changing
         n=now.mon+1;    // Month.       [0-11]
         if(n>=10) { n-=10; bitmap(49,3,mDIGI1); }
         bitmap(65,3,(int16_t)pgm_read_word(mDIGITS+n));
     }
     bitmap(80,3,mDIGIdash);
-    if(!testbit(now.halfsec,0) || Selected!=DAY ) {  // Flash when changing
+    if(SECPULSE() || Selected!=DAY ) {  // Flash when changing
         n=now.mday+1; d=0; // Day.         [0-30]
         while (n>=10) { d++; n-=10; }
         bitmap(95,3,(int16_t)pgm_read_word(mDIGITS+d));
         bitmap(111,3,(int16_t)pgm_read_word(mDIGITS+n));
+    }
+    if(SECPULSE() && Selected==YEAR) {
+        lcd_goto(54,2);
+        lcd_put5x8(PSTR("20"));
+        printN5x8(now.year);
     }
 }
 
 // Analog Watch Face
 void face1(void) {
     uint8_t s,m,h,i;    
-    m=now.min; s=now.halfsec>>1;
+    m=now.min; s=now.sec;
     h=now.hour*5+m/12;
     // Background image
     memcpy(Disp_send.buffer,Disp_send.buffer3,DISPLAY_DATA_SIZE);
@@ -235,25 +267,38 @@ void WATCH(void) {
     uint8_t newface=0;
     uint8_t Faces=0;
     uint8_t Change_timeout;
+    Selected = 0;
     setbit(WOptions,update);
+    SyncTime();
+    TCF0.CCA = (now.hour*3600)+((now.min+1)*60)-1;
+    TCF0.INTFLAGS = 0xF0;   // Clear compare flag
+    TCF0.INTCTRLB = 0x02;   // 1 minute interrupt, medium level
     do {
         // Refresh screen?
-        if(  Selected ||                          // Changing the time
-             testbit(WOptions,update) ||                            // Forced update
-           (!testbit(WOptions,seconds) && now.halfsec==0) ||        // Every minute
-           ( testbit(WOptions,seconds) && (!testbit(now.halfsec,0))) ) {   // Every second or minute in low power
-                    
-            if(testbit(WOptions,seconds)) dma_display();    // Don't use double buffer in low power (not displaying seconds)
+        if( Selected ||                          // Changing the time
+            testbit(WOptions,update) ||                    // Forced update
+            (SECPULSE() && (
+                ( testbit(WOptions,seconds))))) {               // Every second or minute in low power
+            // Send previous frame to display, the switch buffers
+            if(testbit(WOptions,seconds) && !Selected) {
+                dma_display();    // Don't use double buffer in low power (not displaying seconds)
+            }                
             SwitchBuffer();
             clr_display();
+            // Write data to active buffer
             switch(Faces) {
                 case 0: face0(); break;
                 case 1: face1(); break;
 				case 2: face2(); break;
             }
-            if(!testbit(WOptions,seconds)) {   // Don't use double buffer in low power
+            // If double buffered not used, send data to display here
+            if(!testbit(WOptions,seconds) || Selected) {   // Don't use double buffer in low power or when changing time
                 dma_display();
-            }                
+            }
+            else {
+                now.sec++;
+                if(now.sec>=60) now.sec=0;                      
+            }
             clrbit(WOptions,update);
             WaitDisplay();
         }
@@ -269,30 +314,33 @@ void WATCH(void) {
                 if(Faces==1) togglebit(WOptions, seconds);
                 newface=1;
             }
-/*            if(testbit(Key,K3)) {
-                if(Faces==2) togglebit(WOptions, seconds);
-                newface=2;
-            }*/
+//            if(testbit(Key,K3)) {
+//                if(Faces==2) togglebit(WOptions, seconds);
+//                newface=2;
+//            }
             if(testbit(Key,KM)) {
                 Selected++;
-                if(Selected>YEAR) Selected=0;
+                if(Selected>YEAR) {
+                    Selected=0;
+                    SyncTimer();
+                }                    
             }
             if(Selected) {
                 uint8_t temp;
-                Change_timeout = 120;   // 120 half seconds -> 1 Minute
+                Change_timeout = 60;   // 60 seconds -> 1 Minute
                 cli();  // Prevent the RTC interrupt from changing the time in this block
                 switch(Selected) {
                     case SECOND:
-                        if(testbit(Key,KI)) if(now.halfsec<119) now.halfsec++;
-                        if(testbit(Key,KD)) if(now.halfsec) now.halfsec--;
+                        if(testbit(Key,KI)) if(now.sec<59) { now.sec++; SyncTimer(); }
+                        if(testbit(Key,KD)) if(now.sec) { now.sec--; SyncTimer(); }
                     break;
                     case MINUTE:
                         if(testbit(Key,KI)) if(now.min<59) now.min++; else now.min=0;
                         if(testbit(Key,KD)) if(now.min) now.min--; else now.min=59;
                     break;
                     case HOUR:
-                        if(testbit(Key,KI)) if(now.hour<23) now.hour++; else now.hour=0;
-                        if(testbit(Key,KD)) if(now.hour) now.hour--; else now.hour=23;
+                        if(testbit(Key,KI)) if(now.hour<11) now.hour++; else { now.hour=0; togglebit(Misc, hour_pm); }
+                        if(testbit(Key,KD)) if(now.hour) now.hour--; else { now.hour=11; togglebit(Misc, hour_pm); }
                     break;
                     case DAY:
                         temp=pgm_read_byte_near(monthDays+now.mon)-1;
@@ -312,11 +360,13 @@ void WATCH(void) {
                 }
                 findweekday(&now);
                 sei();
+            } else SyncTime();
+            if(Change_timeout==0) {
+                Selected=0;
+                SyncTimer();
             }
         }
-        if(Change_timeout==0) {
-            Selected=0;
-        }
+
         else Change_timeout--;
         if(Faces!=newface) {    // The watch face has changed
             Faces=newface;
@@ -356,6 +406,7 @@ void WATCH(void) {
         asm("sleep");
         asm("nop");
     } while(!testbit(Key,KB));
+    TCF0.INTCTRLB = 0x00;   // Disable 1 minute interrupt
 }
 
 void CALENDAR(void) {
@@ -446,7 +497,7 @@ void gettime(time_var *timep) {
         second-=60;
         timep->min++;
     }        
-    timep->halfsec = seconds*2;    // Get seconds
+    timep->sec = seconds;    // Get seconds
     timep->wday= days%7;     // Day of the week
     
     uint16_t daysinyear;
@@ -495,7 +546,7 @@ void settime(time_var *timeptr) {
     }
     else second = timeptr->hour*60*60;
     second+= timeptr->min*60;
-    second+= timeptr->halfsec>>1;
+    second+= timeptr->sec;
 
     TCF0.CNT =  halfdays;
     while(RTC.STATUS & RTC_SYNCBUSY_bm);  // Wait for RTC / Main clock sync

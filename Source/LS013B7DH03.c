@@ -23,6 +23,7 @@
 #include <avr/pgmspace.h>
 #include "display.h"
 #include "mygccdef.h"
+#include "hardware.h"
 
 /* Local functions prototypes */
 void LcdDataWrite (unsigned char);

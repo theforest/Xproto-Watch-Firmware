@@ -60,9 +60,12 @@ uint8_t old_s, old_g1, old_g2;      // sampling, gains before entering meter mod
 uint8_t shortcuti  = 0;             // shortcut index
 
 ACHANNEL CH1,CH2;                   // Analog Channel 1, Channel 2
-DATA DC;                             // Data samples
+DATA DC;                            // Data samples
 uint8_t EEMEM EECHREF1[256] = {0};  // Reference waveform CH1
 uint8_t EEMEM EECHREF2[256] = {0};  // Reference waveform CH2
+int8_t  EEMEM EECH1Pos = 0;         // Position for EE CH1
+int8_t  EEMEM EECH2Pos = 0;         // Position for EE CH2
+uint8_t EEMEM EEHPos = 0;           // Position for EE in XY mode
 
 // ADC system clock timers
 
@@ -160,9 +163,10 @@ const char menustxt[][35] PROGMEM = {           // Menus:
     " SPEED    \0    MODE    \0    RANGE ",     // 34 AWG Menu 5
     "SW FREQ    \0  SW AMP   \0  SW DUTY ",     // 35 AWG Menu 6
     "  DOWN    \0  PINGPONG   \0  ACCEL\0",     // 36 Sweep Mode Menu
-    " IRDA     \0   1 WIRE    \0    MIDI ",     // 37 More Sniffer protocols
-//    " SWEEP    \0  CV/GATE  \0 POS. RANGE",     // 38 Advanced Sweep Settings
-//    "CV/GATE   \0  CONTINUOUS \0   C1=1V ",     // 39 CV/Gate Menu
+//  " FREQUENCY \0  COUNTER \0 PUL WIDTH ",     //    Frequency counter menu
+//  " IRDA     \0   1 WIRE    \0    MIDI ",     //    More Sniffer protocols
+//  " SWEEP    \0  CV/GATE  \0 POS. RANGE",     //    Advanced Sweep Settings
+//  "CV/GATE   \0  CONTINUOUS \0   C1=1V ",     //    CV/Gate Menu
 };
 
 const char menupoint[] PROGMEM = {  // Menu text table
@@ -203,7 +207,6 @@ const char menupoint[] PROGMEM = {  // Menu text table
     22, // MTSEL3 Logic Trigger Select
     24, // MCHDOPT2 Logic options 2
     25, // MPROTOCOL Protocol
-    37, // MPROTOCOL2 More Protocols
     26, // MCHDPULL Logic Inputs Pull
     27, // MDISPLAY2 Display
     28, // MSPI SPI Clock polarity and phase
@@ -252,8 +255,7 @@ const char Next[] PROGMEM = {  // Next Menu
     MTSEL3,     // MTSEL2 Logic Trigger Select
     Mdefault,   // MTSEL3 Logic Trigger Select
     Mdefault,   // MCHDOPT2 Decode
-    MPROTOCOL2, // MPROTOCOL Protocol
-    Mdefault,   // MPROTOCOL2 More Protocols
+    Mdefault,   // MPROTOCOL Protocol
     Mdefault,   // MCHDPULL Logic Inputs Pull
     MDISPLAY1,  // MDISPLAY2 Display
     MSNIFFER,   // MSPI SPI Clock polarity and phase
@@ -361,23 +363,12 @@ void MSO(void) {
     uint8_t chdtrigpos;             // Digital channel trigger position
     const char *text;               // Pointer to constant text
 
-    // Power reduction: Stop unused peripherals
-    PR.PRGEN = 0x18;        // Stop: AES, EBI
-    PR.PRPA  = 0x04;        // Stop: DAC
-    PR.PRPB  = 0x01;        // Stop: AC
-    PR.PRPC  = 0x7C;        // Stop: TWI, USART0, USART1, SPI, HIRES
-    PR.PRPD  = 0x6C;        // Stop: TWI,       , USART1, SPI, HIRES
-    PR.PRPE  = 0x6C;        // Stop: TWI,       , USART1, SPI, HIRES
-
-    // Event to overflow RTC to timer F
-
-
     // Event System
     EVSYS.CH0MUX    = 0xE0;     // Event CH0 = TCE0 overflow used for ADC
     EVSYS.CH1MUX    = 0x20;     // Event CH1 = ADCA CH0 conversion complete
     //EVSYS.CH2MUX    = 0x5A;     // Event CH2 = PORTB Pin 2 (External Trigger)
     EVSYS.CH3MUX    = 0xD8;     // Event CH3 = TCD1 overflow used for DAC
-    EVSYS.CH4MUX    = 0xC0;     // Event CH4 = TCC0 overflow used for freq. measuring
+    //EVSYS.CH4MUX    = 0xC0;     // Event CH4 = TCC0 overflow used for freq. measuring
     EVSYS.CH5MUX    = 0xC8;     // Event CH5 = TCC1 overflow used for freq. measuring
     EVSYS.CH6MUX    = 0x8F;     // Event CH6 = CLKPER / 32768
     EVSYS.CH7MUX    = 0xD0;     // Event CH7 = TCD0 underflow
@@ -432,15 +423,13 @@ void MSO(void) {
 ///////////////////////////////////////////////////////////////////////////////
 // Wait for trigger, start acquisition
         if(!testbit(MStatus, stop) &&      // MSO not stopped and
-           !testbit(MStatus, triggered)) {    // Trigger not set already
+           !testbit(MStatus, triggered)) { // Trigger not set already
 			i=M.Thold;	// Trigger hold
             while(i!=0) {
                 if(testbit(MStatus,update)) break;
                 _delay_ms(1); i--;
             }
-        	USARTE0.CTRLA = 0x00;           // Disable RX interrupt
             if(Srate<11) StartDMAs();
-        	USARTE0.CTRLA = 0x20;           // Enable RX interrupt
             if(!(testbit(Trigger, normal) || testbit(Trigger, autotrg)) ||      // free trigger
             (testbit(Mcursors,roll) && Srate>=11)                               // roll mode in slow sampling
             || MFFT<0x20) {                                                     // or meter mode
@@ -513,8 +502,8 @@ void MSO(void) {
         //RTC.INTCTRL = 0x04;     // Re enable Time out interrupt
         TCC0.INTCTRLA &= ~TC2_LUNFINTLVL_LO_gc; // Trigger timeout Interrupt not needed
 ///////////////////////////////////////////////////////////////////////////////
-// Finish acquiring data
-        if(testbit(MStatus, triggered)) {
+// Finish acquiring data, not in Pulse Counter mode
+        if(testbit(MStatus, triggered) && !(MFFT<0x20 && testbit(MStatus,vdc) &&  testbit(MStatus,vp_p))) {
             if(Srate<11) {
                 int8_t   *q1, *q2, *q3;     // temp pointers to signed 8 bits
                 uint8_t  *p1, *p2, *p3;     // temp pointers to unsigned 8 bits                
@@ -525,7 +514,7 @@ void MSO(void) {
                 ADCA.CTRLB = 0x14;          // signed mode, no free run, 8 bit
                 ADCB.CTRLB = 0x14;          // signed mode, no free run, 8 bit
                 // capture one last sample set
-                DC.frame++;                  // Increase frame counter
+                DC.frame++;                 // Increase frame counter
                 _delay_us(80);              // Wait to process ADC pipeline
                 clrbit(MStatus, triggered);
                 TCC1.CTRLA = 0;             // Stop post trigger counter
@@ -547,17 +536,17 @@ void MSO(void) {
                 i=0;
                 do {
                     uint8_t ch1raw, ch2raw, ch1end,ch2end;
-                    *p3++ = *q3++;   // get Logic data
+                    *p3++ = *q3++;    // get Logic data
                     ch1raw=(*q1++);   // get CH1 signed data
                     ch2raw=(*q2++);   // get CH2 signed data
                     circular++;
-                    if(circular==512) {  // Circular buffer
+                    if(circular>=512) {  // Circular buffer
                         circular=0;
                         q1=(int8_t *)Temp.IN.CH1;
                         q2=(int8_t *)Temp.IN.CH2;
                         q3=(int8_t *)Temp.IN.CHD;
                     }
-                    if(Srate>1) {
+                    if(Srate>1) {   // Srate 0 and 1 only have 256 data points
                         if(testbit(CH1ctrl,chaverage)) {
                             ch1raw=((int8_t)(ch1raw)>>1)+((int8_t)(*q1)>>1);
                         }
@@ -566,7 +555,7 @@ void MSO(void) {
                         }
                         q1++; q2++; q3++; circular++;
                     }
-                    if(circular==512) {  // Circular buffer
+                    if(circular>=512) {  // Circular buffer
                         circular=0;
                         q1=(int8_t *)Temp.IN.CH1;
                         q2=(int8_t *)Temp.IN.CH2;
@@ -589,8 +578,9 @@ void MSO(void) {
                         else ch2end=temp3;    // CH1*CH2
                     }
                     if(testbit(Display,elastic)) {
-                        *p1++=average(*p1,ch1end);
-                        *p2++=average(*p2,ch2end);
+                        *p1=average(*p1,ch1end);    // Can't increase in the same operation
+                        *p2=average(*p2,ch2end);    // (*p1++=average(*p1,ch1end);)
+                        *p1++; *p2++;               // So increase later
                     }
                     else {
                         *p1++=ch1end;
@@ -599,8 +589,38 @@ void MSO(void) {
                 } while (++i);
 				if(testbit(Misc,autosend)) {
                     p1=DC.CH1data;
-                    send(7);            // Start of frame: Send all three channels
+                    send(0x0D);
+                    send(0x0A);
+                    send('F');
 	                for(uint16_t i16=0;i16<256*3;i16++) send(*p1++);
+/*                    i=0;
+                    uint8_t onChannels=0x30;
+                    if(testbit(CH1ctrl,chon)) {
+                        onChannels +=1;
+                        do {
+                            send(*p1++);
+                        } while(++i);
+                    }
+                    if(testbit(CH2ctrl,chon)) {
+                        onChannels +=2;
+                        p1=DC.CH2data;
+                        do {
+                            send(*p1++);
+                        } while(++i);
+                    }
+                    if(testbit(CHDctrl,chon)) {
+                        onChannels +=4;
+                        p1=DC.CHDdata;
+                        do {
+                            send(*p1++);
+                        } while(++i);
+                    }
+                    send(0x0A);
+                    send(0x0D);
+                    send(onChannels);            // Send which channels are active*/
+                    send(0x0A);
+                    send(0x0D);
+                    send('7');
 				}
 				// USB - Send new data if previous transfer complete
 				if((endpoints[1].in.STATUS & USB_EP_TRNCOMPL0_bm)) {
@@ -615,9 +635,9 @@ void MSO(void) {
             else {
                 if(testbit(Mcursors,roll)) {
                     clrbit(MStatus, triggered);
-                    if(!testbit(MStatus,stop)) TCE0.INTCTRLA = 0x03;    // Enable sampling interrupt
+                    if(!testbit(MStatus,stop)) TCE0.INTCTRLA = TC_OVFINTLVL_MED_gc;    // Enable sampling interrupt
                 }
-                else if(!testbit(Misc,sacquired)) TCE0.INTCTRLA = 0x03;  // Enable sampling interrupt
+                else if(!testbit(Misc,sacquired)) TCE0.INTCTRLA = TC_OVFINTLVL_MED_gc;  // Enable sampling interrupt
                 else {    // Acquired complete buffer
                     clrbit(Misc, sacquired);
                     clrbit(MStatus, triggered);
@@ -800,10 +820,10 @@ void MSO(void) {
 // Display XY
         if(testbit(MFFT, xymode)) {
             uint8_t *p1,*p2;
-            if(testbit(Display,showset)) tiny_printp(0,0,PSTR("XY MODE"));
+            if(testbit(Display,showset)) tiny_printp(0,0,menustxt[31]+25); // "XY MODE"
             p1=DC.CH1data;
             p2=DC.CH2data;
-            i=0; do {
+            uint8_t i=0; do {
                 uint8_t y;
                 if(Srate>=11 && !testbit(Mcursors,roll)) {
                     if(i==Index) break; // Don't display old data in slow sampling rate
@@ -837,7 +857,7 @@ void MSO(void) {
     			        set_pixel(M.HPos,48);       // Vertical dot
 			        }
                     fft_stuff(NULL);
-                    for(i=0; i<FFT_N/2; i++) {
+                    for(uint8_t i=0; i<FFT_N/2; i++) {
 				        fftdata=Temp.FFT.magn[(uint8_t)(i-M.HPos)]>>1;
 						if(fftdata>(MAX_Y-8)) fftdata=(MAX_Y-8);
                         if(testbit(Display, line)) lcd_line(i, (MAX_Y-8)-fftdata, i, (MAX_Y-8));
@@ -879,7 +899,7 @@ void MSO(void) {
             if(!testbit(MStatus, triggered)) {  // Data ready
                 if(adjusting==0) {              // Done adjusting, now show data
                     uint8_t *p1,*p2;
-                    adjusting = 6;              // Re-init autosetup
+                    adjusting = 4;              // Re-init autosetup
                     clr_display();
                     tiny_printp(12,0, menustxt[12]+1);   // CH1 text
                     tiny_printp(76,0, menustxt[12]+16);  // CH2 Text
@@ -927,11 +947,6 @@ void MSO(void) {
 				endpoints[1].in.CNT = 770 | USB_EP_ZLP_bm;	// Send 256*3 bytes + frame, enable Auto Zero Length Packet
 				endpoints[1].in.STATUS &= ~(USB_EP_TRNCOMPL0_bm | USB_EP_BUSNACK0_bm | USB_EP_OVF_bm);
 			}
-            if(testbit(Misc,autosend) && Srate>=11) {    // Send to PC
-                send(DC.CH1data[Index]);
-                send(DC.CH2data[Index]);
-                send(DC.CHDdata[Index]);
-            }
         }
 ///////////////////////////////////////////////////////////////////////////////
 // Auto setup
@@ -1011,37 +1026,23 @@ void MSO(void) {
                         else Srate=1;
                     }
                 break;
-                case 1: // Increase gain CH2
-                    if((CH2.max<188 && CH2.min>73)  && M.CH2gain<j)      M.CH2gain++;
+                case 1: // Increase gain
+                case 5:
+                    if((CH1.max<188 && CH1.min>73) && M.CH1gain<j)      M.CH1gain++;
+                    if((CH2.max<188 && CH2.min>73) && M.CH2gain<j)      M.CH2gain++;
                 break;
-                case 2: // Decrease gain CH2
-                    if((CH2.max>=250 || CH2.min <18) && M.CH2gain>0)     M.CH2gain--;
+                case 2: // Decrease gain
+                case 6:
+                    if ((CH1.max>=250 || CH1.min <18) && M.CH1gain>0)   M.CH1gain--;
+                    if ((CH2.max>=250 || CH2.min <18) && M.CH2gain>0)   M.CH2gain--;
                 break;
-                case 3: // Increase gain CH1
-                    if((CH1.max<188 && CH1.min>73) && M.CH1gain<j)       M.CH1gain++;
-                break;
-                case 4: // Decrease gain CH1
-                    if ((CH1.max>=250 || CH1.min <18) && M.CH1gain>0)    M.CH1gain--;
-                break;
-                case 5: // Increase sampling rate
+                case 3: // Increase sampling rate
                     if((CH1.f>124 || CH2.f>124) && Srate>1) Srate--;
                 break;
-                case 6: // Decrease sampling rate
+                case 4: // Decrease sampling rate
                     if(CH1.f<50 && CH2.f<50 && Srate<10) Srate++;
                 break;
-                case 7: // Increase gain CH2
-                    if((CH2.max<188 && CH2.min>73)  && M.CH2gain<j)      M.CH2gain++;
-                break;
-                case 8: // Decrease gain CH2
-                    if((CH2.max>=250 || CH2.min <18) && M.CH2gain>0)     M.CH2gain--;
-                break;
-                case 9: // Increase gain CH1
-                    if((CH1.max<188 && CH1.min>73) && M.CH1gain<j)       M.CH1gain++;
-                break;
-                case 10: // Decrease gain CH1
-                    if ((CH1.max>=250 || CH1.min <18) && M.CH1gain>0)    M.CH1gain--;
-                break;
-                case 11: // Start with fastest sampling rate;
+                case 7: // Start with fastest sampling rate;
                     Srate=1;
                 break;
             }
@@ -1097,7 +1098,7 @@ void MSO(void) {
                             if(!testbit(MStatus,stop)) {
                                 if(Srate<21) Srate++;
                                 else Srate=21;
-                                i=0; do {
+                                uint8_t i=0; do {
                                     DC.CH1data[i]=128;
                                     DC.CH2data[i]=128;
                                     DC.CHDdata[i]=0;
@@ -1111,7 +1112,7 @@ void MSO(void) {
                         if(testbit(Key,K3)) {    // Sampling rate
                             if(!testbit(MStatus,stop)) {
                                 if(Srate) Srate--;
-                                i=0; do {
+                                uint8_t i=0; do {
                                     DC.CH1data[i]=128;
                                     DC.CH2data[i]=128;
                                     DC.CHDdata[i]=0;
@@ -1131,7 +1132,7 @@ void MSO(void) {
                     if(testbit(Key,K2)) {    // Less gain
                         if(M.CH1gain) {
                             M.CH1gain--;
-                            i=0; do {   // resize
+                            uint8_t i=0; do {   // resize
                                 DC.CH1data[i] = half(DC.CH1data[i]);
                             } while (++i);
                         }
@@ -1139,7 +1140,7 @@ void MSO(void) {
                     if(testbit(Key, K3)) {    // More gain
                         if(M.CH1gain<6) {
                             M.CH1gain++;
-                            i=0; do {   // resize
+                            uint8_t i=0; do {   // resize
                                 DC.CH1data[i] = twice(DC.CH1data[i]);
                             } while (++i);
                         }
@@ -1151,7 +1152,7 @@ void MSO(void) {
                     if(testbit(Key,K2)) {    // Less gain
                         if(M.CH2gain) {
                             M.CH2gain--;
-                            i=0; do {   // resize
+                            uint8_t i=0; do {   // resize
                                 DC.CH2data[i] = half(DC.CH2data[i]);
                             } while (++i);
                         }
@@ -1159,7 +1160,7 @@ void MSO(void) {
                     if(testbit(Key,K3)) {    // More gain
                         if(M.CH2gain<6) {
                             M.CH2gain++;
-                            i=0; do {   // resize
+                            uint8_t i=0; do {   // resize
                                 DC.CH2data[i] = twice(DC.CH2data[i]);
                             } while (++i);
                         }
@@ -1284,9 +1285,15 @@ void MSO(void) {
                         clrbit(MStatus,vdc);
                         setbit(MStatus,vp_p);
                     }
-                    if(testbit(Key,K3)) {       // FREQUENCY
-                        clrbit(MStatus,vdc);
-                        clrbit(MStatus,vp_p);
+                    if(testbit(Key,K3)) {       // FREQUENCY / COUNTER
+                        if(!testbit(MStatus,vdc) && !testbit(MStatus,vp_p)) {
+                            setbit(MStatus,vdc);
+                            setbit(MStatus,vp_p);
+                        }
+                        else {
+                            clrbit(MStatus,vdc);
+                            clrbit(MStatus,vp_p);
+                        }
                     }
                 break;
                 case MAWG:    // AWG Control
@@ -1328,8 +1335,8 @@ void MSO(void) {
                 break;
                 case MMAIN3:     // Menu Select 3: Mode
                     // Check Tactile Switches
-                    temp1=MFFT;
         		    if(MFFT<0x20) RestorefromMeter();
+					uint8_t oldMFFT=MFFT;
                     if(testbit(Key,K1) && testbit(Key,K3)) { // Scope or XY + FFT
                         if(testbit(MFFT,xymode)) {
                             clrbit(MFFT,scopemode);
@@ -1366,7 +1373,7 @@ void MSO(void) {
                         }
                     }
 					if(MFFT<0x20) GoingtoMeter();
-                    if(temp1!=MFFT) setbit(Misc,redraw);    // Mode changed
+                    if(oldMFFT!=MFFT) setbit(Misc,redraw);    // Mode changed
                 break;
                 case MMAIN4:     // Menu Select 4: FFT
                     if(testbit(Key,K1)) togglebit(MFFT, iqfft);     // Set IQ FFT
@@ -1540,20 +1547,6 @@ void MSO(void) {
                     if(testbit(Key,K3)) {   // SPI
 						M.CHDdecode = spi;
                         Menu=MSPI;
-                    }
-                break;
-                case MPROTOCOL2:                     // Protocol Decoding
-                    if(testbit(Key,K1)) {   // IRDA
-                        M.CHDdecode = irda;
-                        Menu=MSNIFFER;
-                    }
-                    if(testbit(Key,K2)) {   // 1WIRE
-                        M.CHDdecode = onewire;
-                        Menu=MSNIFFER;
-                    }
-                    if(testbit(Key,K3)) {   // MIDI
-                        M.CHDdecode = midi;
-                        Menu=MSNIFFER;
                     }
                 break;
                 case MCHDPULL:     // Logic Input Pull
@@ -1850,7 +1843,7 @@ void MSO(void) {
             CheckMax(); // Check variables
         }
 ///////////////////////////////////////////////////////////////////////////////
-// Display info (Menu, Grid, cursors, reference, settings...)
+// Display info (Menu, Grid, cursors, settings...)
         if(testbit(MStatus, update)) {
             clrbit(MStatus, update);
             Apply();        // Apply new oscilloscope settings
@@ -1867,7 +1860,7 @@ void MSO(void) {
                 }
             }
         }
-        if(testbit(Misc,lowbatt)) {
+        if(testbit(CH1ctrl,lowbatt)) {
             //memcpy_P(Disp_send.display_data,  &BATTICON, 8);   // Low battery icon
         }
         // Print menu, also determine which items are selected and
@@ -1920,8 +1913,8 @@ void MSO(void) {
                                 (i==2 && testbit(Display, disp_inv)) ) setbit(Misc,negative);
                         break;
                         case MMETER:
-                            if( (i==0 && testbit(MStatus, vdc)) ||
-                                (i==1 && testbit(MStatus, vp_p)) ||
+                            if( (i==0 && testbit(MStatus, vdc) && !testbit(MStatus, vp_p)) ||
+                                (i==1 && testbit(MStatus, vp_p) && !testbit(MStatus, vdc)) ||
                                 (i==2 && (!testbit(MStatus, vdc) && !testbit(MStatus, vp_p)) ) ) setbit(Misc,negative);
                         break;
                         case MAWG:
@@ -2097,8 +2090,8 @@ void MSO(void) {
                     GLCD_Putchar(0x35+((Sniffer&0x18)>>3)); // UART Data Bits
                     tiny_printp(8,LAST_LINE,baudtxt[Sniffer&0x07]); // UART Baud Rate
                     if(testbit(Sniffer,parmode)) {
-                    if(testbit(Sniffer,parity)) tiny_printp(44,LAST_LINE,PSTR("ODD PARITY"));
-                    else tiny_printp(40,LAST_LINE,PSTR("EVEN PARITY"));
+                        if(testbit(Sniffer,parity)) tiny_printp(44,LAST_LINE,PSTR("ODD PARITY"));
+                        else tiny_printp(40,LAST_LINE,PSTR("EVEN PARITY"));
                     }
                     else tiny_printp(48,LAST_LINE,PSTR("NO PARITY"));
                     if(testbit(Sniffer,stopbit)) tiny_printp(92,LAST_LINE,PSTR("2 STOPBIT"));
@@ -2118,11 +2111,11 @@ void MSO(void) {
                 case MAWGFREQ:  // Frequency
                     if(M.AWGdesiredF<100000) {
                         printF(0,LAST_LINE,(int32_t)(cycles)*50*(125000000L/(TCD1.PER+1))); // 125000000 = (1000*F_CPU/256)
-                        lcd_putsp(PSTR("HZ"));
+                        lcd_putsp(unitkHz+1);   // "HZ"
                     }
                     else {
                         printF(0,LAST_LINE,(int32_t)(cycles)*50*(F_CPU/256)/(TCD1.PER+1));
-                        lcd_putsp(PSTR("KHZ"));
+                        lcd_putsp(unitkHz);     // "KHZ"
                     }
                 break;
                 case MTLEVEL:   // Trigger Level
@@ -2154,7 +2147,7 @@ void MSO(void) {
                 case MSW2:
                     lcd_putsp(Ftwo+1); printN(M.Sweep2);
                     break;
-                case MHPOS: lcd_putsp(PSTR("STOP")); break;
+                case MHPOS: lcd_putsp(Stop); break;
                 case MSWSPEED:
                     printN(AWGspeed);
                 break;
@@ -2177,7 +2170,7 @@ void MSO(void) {
                 break;
             }
         }
-        else if(testbit(MStatus, stop)) tiny_printp(0,LAST_LINE, PSTR("STOP"));
+        else if(testbit(MStatus, stop)) tiny_printp(0,LAST_LINE, Stop);
         if(MFFT>=0x20) { // Not Meter mode
             // Grid
             if(!testbit(MFFT, fftmode)) {
@@ -2408,9 +2401,13 @@ void MSO(void) {
 		if(testbit(MStatus, updateawg)) BuildWave();
         ADCA.CH2.CTRL     = 0x80;   // VCC measurement
         // Wait for display transfer
+        
+        // change delay to sleep
+        delay_ms(2); OFFGRN();
+        // change wait to sleep
         WaitDisplay();
-        if(ADCA.CH2RESL<18) setbit(Misc, lowbatt);
-        else clrbit(Misc, lowbatt);
+        if(ADCA.CH2RESL<18) setbit(CH1ctrl, lowbatt);
+        else clrbit(CH1ctrl, lowbatt);
 ///////////////////////////////////////////////////////////////////////////////
 // Limit LCD refresh rate
 /*        if(MFFT>=0x20 || (adjusting==0)) { // Not meter mode, Auto setup has not yet locked on settings
@@ -2432,26 +2429,22 @@ void AutoSet(void) {
     clrbit(Trigger, normal);    // Clear Normal trigger
     clrbit(Trigger, single);    // Clear Single trigger
     clrbit(Trigger, autotrg);   // Clear Auto trigger
-    adjusting=11;
+    adjusting=7;                // First adjusting step
     Menu=Mdefault;
     Key=0;
 }
 
 // Reduce gain in Auto setup
 void Reduce(void) {
-//    uint8_t max=64;
-//    if(testbit(CH1ctrl,chon) && testbit(CH2ctrl,chon)) max=32;
     if(M.CH1gain && CH1.vpp>32) {
         M.CH1gain--;
         if(M.Tsource==0) M.Tlevel=half(M.Tlevel);
         CH1.vpp=CH1.vpp/2;
-//        M.CH1pos=M.CH1pos/2;
     }
     if(M.CH2gain && CH2.vpp>32) {
         M.CH2gain--;
         if(M.Tsource==1) M.Tlevel=half(M.Tlevel);
         CH2.vpp=CH2.vpp/2;
-//        M.CH2pos=M.CH2pos/2;
     }
 }
 
@@ -2470,11 +2463,11 @@ void GoingtoMeter(void) {
     old_g2 = M.CH2gain;
     M.CH1gain=0;
     M.CH2gain=0;
-    adjusting=11;
+    adjusting=7;            // First adjusting step
 }
 
 uint8_t fft_stuff(uint8_t *p1) {
-    uint8_t i=0,f,w;
+    uint8_t f,w;
     const uint8_t *p2;		// Pointer to channel data
 	const int8_t *p3;		// Pointer to window function
     if(testbit(MFFT, hamming)) p3=Hamming;          // Apply Hamming window
@@ -2483,6 +2476,7 @@ uint8_t fft_stuff(uint8_t *p1) {
 	else setbit(Misc, bigfont);		// Temporally use this bit for "no window"
 	if(testbit(MFFT,iqfft)) {
     	p1=DC.CH1data; p2=DC.CH2data;
+        uint8_t i=0;
         do {
             uint8_t ch1,ch2;
 		    w=pgm_read_byte_near(p3);           // Get window data
@@ -2496,13 +2490,14 @@ uint8_t fft_stuff(uint8_t *p1) {
         } while (++i);
 	}
 	else {
+        uint8_t i=0;
         do {
             uint8_t ch;
-		    w=pgm_read_byte_near(p3);       // Get window data
+		    w=pgm_read_byte_near(p3);           // Get window data
 		    if(testbit(Misc,bigfont)) w=127;	// No window
-		    if(i<127) p3++;                 // Window symmetry
-		    if(i>127) p3--;                 // (only stored half of window)
-            ch=(int8_t)((*p1++)-128);       // Convert to signed char
+		    if(i<127) p3++;                     // Window symmetry
+		    if(i>127) p3--;                     // (only stored half of window)
+            ch=(int8_t)((*p1++)-128);           // Convert to signed char
             Temp.FFT.bfly[i].r=Temp.FFT.bfly[i].i=(signed int)(FMULS8(ch, w)*256);
         } while (++i);
 	}
@@ -2511,8 +2506,8 @@ uint8_t fft_stuff(uint8_t *p1) {
     fft_output(Temp.FFT.bfly, Temp.FFT.magn);
     // Find maximum frequency
     uint8_t max=3,current;
-    i=1;                        // Ignore DC
-    if(Temp.FFT.magn[0]>Temp.FFT.magn[1]) i=2;    // Ignore big DC
+    uint8_t i=1;                                // Ignore DC
+    if(Temp.FFT.magn[0]>Temp.FFT.magn[1]) i=2;  // Ignore big DC
     f=0;
     for(; i<FFT_N/2; i++) {
         current=Temp.FFT.magn[i];
@@ -2583,7 +2578,7 @@ end_scan:
     }
 }
 
-// Measurements for Meter Mode
+// Measurements for Meter Mode, ADC will use 12bit resolution
 static inline void Measurements(void) {
     int32_t avrg1=0, avrg2=0;       // Averages
     static int16_t v1,v2;
@@ -2600,9 +2595,9 @@ static inline void Measurements(void) {
         oldprescaleb = ADCB.PRESCALER;
         oldch0=ADCA.CH0.CTRL;
         oldch1=ADCB.CH0.CTRL;
-        ADCA.CTRLB = 0x90;          // signed mode, no free run, 12 bit right adjusted, low impedance
+        ADCA.CTRLB = 0x10;          // signed mode, no free run, 12 bit right adjusted
         ADCA.PRESCALER = 0x07;      // Prescaler 512 (125kHZ ADC clock)
-        ADCB.CTRLB = 0x90;          // signed mode, no free run, 12 bit right adjusted, low impedance
+        ADCB.CTRLB = 0x10;          // signed mode, no free run, 12 bit right adjusted
         ADCB.PRESCALER = 0x07;      // Prescaler 512 (125kHZ ADC clock)
         do {
             ADCA.CH0.CTRL     = 0x83;   // Start conversion, Differential input with gain
@@ -2731,11 +2726,11 @@ static inline void ShowCursorV(void) {
 
 // Display Horizontal Cursor
 static inline void ShowCursorH(void) {
-    uint8_t i,y,gain,HcursorA,HcursorB,*data;
-	int8_t CHPos;
-	ACHANNEL *CH;
     // Display Horizontal Cursor, cursor disabled during FFT mode
     if(!testbit(MFFT, fftmode)) {
+        uint8_t gain,HcursorA,HcursorB,*data;
+        int8_t CHPos;
+        ACHANNEL *CH;
 	    if(testbit(Mcursors,cursorh1)) {
     		gain=M.CH1gain;
 		    HcursorA=M.Hcursor1A;
@@ -2764,7 +2759,7 @@ static inline void ShowCursorH(void) {
         //if(!testbit(MFFT,xymode)) HcursorA=HcursorA>>1;
         //else HcursorA=127-HcursorA;
         //HcursorB=HcursorB>>1;
-        for(i=1; i<=(MAX_X-1); i+=4) {
+        for(uint8_t i=1; i<=(MAX_X-1); i+=4) {
             if(testbit(MFFT,xymode)) {
                 if(i<=MAX_Y) set_pixel(HcursorA,i);  // Vertical Line for HcursorA
             }
@@ -2788,6 +2783,7 @@ static inline void ShowCursorH(void) {
             lcd_putsp(Hcursorunit);
         }
         else {
+            uint8_t y;
             // Apply position
             adjustedA=32-HcursorA+(CHPos+64)/2;
             adjustedB=32-HcursorB+(CHPos+64)/2;
@@ -2826,6 +2822,7 @@ void CheckMax(void) {
     if(M.SWSpeed==0)    M.SWSpeed=1;    // Minimum sweep speed
     if(M.Tlevel<3)      M.Tlevel=3;     // Minimum Trigger Level
     if(M.Window1<M.Window2) M.Window1=M.Window2;
+    if(M.Ttimeout<3)    M.Ttimeout=3;   // Minimum of 163.84ms timeout, so that 10ms/div has enough time to get samples (160ms)
     if(Srate>21)        Srate=21;       // Maximum sampling rate
 }
 
@@ -2847,6 +2844,9 @@ void CheckPost(void) {
 
 // Apply oscilloscope settings
 void Apply(void) {
+    // Validate variables
+    CheckMax();
+    CheckPost();    
     PMIC.CTRL = 0x04;       // Only high level interrupts
     TCE0.CTRLA = 0;		    // TCE0 controls Interrupt ADC, srate: 6, 7, 8, 9, 10 and fixed value for slow sampling
     TCE0.CTRLB = 0;
@@ -2862,9 +2862,6 @@ void Apply(void) {
     TCD0.CTRLA = 0x0E;      // Event CH6 (CLKPER / 32768 -> 1.024ms)
     TCD0.CTRLE = 0x02;      // Timer TCD0 Split Mode
     TCD0.PERL = 39;         // 40.96mS -  24.4140625 Hz
-    // Validate variables
-    CheckMax();
-    CheckPost();
     // Count CHD enabled pins
     uint8_t temp1,temp2;
     temp1=0;
@@ -2937,7 +2934,6 @@ void Apply(void) {
 	if(Srate>7) srateoff=7;
     CH1.offset=-(eeprom_read_byte((uint8_t *)&offset8CH1[srateoff][M.CH1gain]));
     CH2.offset=-(eeprom_read_byte((uint8_t *)&offset8CH2[srateoff][M.CH2gain]));
-    PMIC.CTRL = 0x07;   // Enable all interrupts
     // Logic input options
     uint8_t temp;
     temp=1;         // Sense rising edge (for freq. counter)
@@ -2949,6 +2945,7 @@ void Apply(void) {
     PORTCFG.MPCMASK = 0xFF;
     PORTC.PIN0CTRL  = temp;
 	clrbit(MStatus, updatemso);
+    PMIC.CTRL = 0x07;   // Enable all interrupts
  }
 
 // Slow sampling control - 640Hz or 1600Hz
@@ -2972,11 +2969,11 @@ ISR(TCE0_OVF_vect) {
     mul=128+FMULS8(sch1,-(int8_t)sch2);    // CH1*CH2
     if(testbit(CH1ctrl,chmath)) {
         if(testbit(CH1ctrl,submult)) ch1=addwsat(ch1,-(int8_t)sch2);   // CH1+CH2
-        else ch1=mul;                                                   // CH1*CH2
+        else ch1=mul;                                                  // CH1*CH2
     }
     if(testbit(CH2ctrl,chmath)) {
         if(testbit(CH2ctrl,submult)) ch2=addwsat(ch2,-(int8_t)sch1);   // CH1+CH2
-        else ch2=mul;                                                   // CH1*CH2
+        else ch2=mul;                                                  // CH1*CH2
     }
     sum1+=ch1;
     sum2+=ch2;
@@ -2996,6 +2993,16 @@ ISR(TCE0_OVF_vect) {
         DC.CH1data[Index] = ch1;
         DC.CH2data[Index] = ch2;
         DC.CHDdata[Index] = VPORT2.IN;
+        if(testbit(Misc,autosend)) {    // Send to PC
+            if(Index==0) {
+                send(0x0D);
+                send(0x0A);
+                send('S');
+            }
+            send(ch1);
+            send(ch2);
+            send(VPORT2.IN);
+        }
     }
     if(testbit(MFFT, scopemode) && !testbit(Mcursors,roll)) {  // Draw data if in scope mode
         // Draw Channel 1
@@ -3069,7 +3076,14 @@ ISR(TCE0_OVF_vect) {
     else if(testbit(MFFT, fftmode) && testbit(Display,showset)) set_pixel(Index>>1, 63);   // FFT progress
     if(count==0) {
         Index++;
-        if(Index==0) setbit(Misc,sacquired);
+        if(Index==0) {
+            setbit(Misc,sacquired);
+            if(testbit(Misc,autosend)) {    // end of frame
+                send(0x0A);
+                send(0x0D);
+                send('7');
+            }
+        }            
         if(!testbit(Mcursors,roll)) {
             if(Index==0) {
                 if(testbit(CHDctrl,hexs) && testbit(MFFT, scopemode)) HEXSerial();

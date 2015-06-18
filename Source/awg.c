@@ -25,15 +25,12 @@ uint8_t AWGBuffer[256]; // AWG Output Buffer
 uint8_t cycles;         // Cycles in AWG buffer
 
 void moveF(void) {
-	uint8_t i;
-	uint32_t add;
-	uint32_t F;
-	F=M.AWGdesiredF;
-    i=6;
+	uint32_t F=M.AWGdesiredF;
+    uint8_t i=6;
 	do {    // Find range
         if(F>=pgm_read_dword_near(Powersof10+i)) break;
     } while(i--);
-	add=pgm_read_dword_near(Powersof10+i-2);
+	uint32_t add=pgm_read_dword_near(Powersof10+i-2);
 	if(testbit(Misc,negative)) F-=add;
 	else if(testbit(Misc, bigfont)) F+=add;
 	else {  // Shortcuts
@@ -47,8 +44,6 @@ void moveF(void) {
 void BuildWave(void) {
     uint8_t i,j;
     int8_t *p;
-    uint16_t step;          // used in duty cycle calculation
-    uint16_t d;             // used in duty cycle calculation
     uint32_t Flevel=1600000;
     if(M.AWGamp>0)                  M.AWGamp=0;                 // AWGAmp must be negative
     if(M.AWGduty==0)                M.AWGduty=1;                // Zero is invalid
@@ -98,7 +93,9 @@ void BuildWave(void) {
     }
     // Prepare buffer:
     // ******** Duty cycle ********
-    i=0; step=0; d=(256-M.AWGduty)<<1;
+    uint16_t step=0;
+	uint16_t d;
+    i=0; d=(256-M.AWGduty)<<1;
 	int8_t k;
     p=(int8_t *)Temp.DATA.AWGTemp1;
     do {
@@ -128,22 +125,3 @@ void BuildWave(void) {
     clrbit(MStatus, updateawg);
     PMIC.CTRL = 0x07; // Enable all interrupts
 }
-/*
-void VCO(void) {
-    // http://www.phy.mtu.edu/~suits/notefreqs.html
-    // http://www.phy.mtu.edu/~suits/NoteFreqCalcs.html
-    clr_display();
-    M.CH1gain=1;    // +/- 10.24V range
-    M.CH2gain=1;    // +/- 10.24V range
-    Srate = 4;      //
-    // CH1 -> Frequency, CH2 -> Amplitude
-    while(!testbit(Key,KD)) {
-        StartDMAs();                // Takes about 1.024ms
-        show_display();             // Takes about 1ms
-        ADCA.CTRLB = 0x14;          // Stop free run of ADC (signed mode, no free run, 8 bit)
-        // Disable DMAs
-        clrbit(DMA.CH0.CTRLA, 7);
-        clrbit(DMA.CH2.CTRLA, 7);
-        clrbit(DMA.CH1.CTRLA, 7);
-    }
-}*/

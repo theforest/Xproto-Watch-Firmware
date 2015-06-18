@@ -61,7 +61,6 @@ enum {  // Menu reference:
     MTSEL3,     // " BIT_5    \0    BIT_6    \0    BIT_7", // Logic Trigger Select
     MCHDOPT2,   // " PARALLEL  \0   SERIAL  \0      PULL", // Logic Options 2
     MPROTOCOL,  // " I2C      \0     UART    \0     SPI ", // Protocol
-    MPROTOCOL2, // " IRDA     \0    1 WIRE   \0    MIDI ", // More Protocols
     MCHDPULL,   // " NO PULL  \0   PULL UP  \0 PULL DOWN", // Logic Inputs Pull
     MDISPLAY2,  // " PERSISTENT  \0   LINE   \0    SHOW ", // Display
     MSPI,       // " CPOL     \0     CPHA    \0      GO ", // SPI Clock polarity and phase

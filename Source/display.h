@@ -17,13 +17,6 @@
 #include <stdint.h>
 #include "fonts.h"
 
-#define MENUPULL    0x18    // Pull down, invert pin
-
-#define     LCDVDD          5           // LCD VDD
-#define     LCD_DISP        2           // DISPLAY ON / OFF
-#define		LCD_CS		    0           // Chip select
-#define		LCD_CTRL        VPORT3.OUT
-
 // LS013B7DH03 Commands
 // M0 M1 M2 DMY DMY DMY DMY DMY
 
