@@ -199,6 +199,7 @@ void Calibrate(void);
 void CCPWrite( volatile uint8_t * address, uint8_t value );
 
 extern uint8_t EEMEM EESleepTime;     // Sleep timeout in minutes
+extern volatile int8_t backlight; // kamotswolf - back-light timeout remaining in seconds
 
 // Big buffer to store large but temporary data
 typedef union {

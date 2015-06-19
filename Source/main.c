@@ -196,7 +196,8 @@ void SimpleADC(void);
 static inline void LoadEE(void);                  // Load settings from EEPROM
 void CalibrateOffset(void);
 void CalibrateGain(void);
-    
+volatile int8_t backlight = -1; // kamotswolf - back-light timeout remaining in seconds
+
 int main(void) {
     PR.PRGEN = 0b01011000;          // Stop: USB, AES, EBI, EVSYS, only RTC and DMA on
     PR.PRPA  = 0b00000111;          // Stop: DAC, ADC, AC
@@ -426,8 +427,9 @@ ISR(PORTF_INT0_vect) {
     if(!testbit(in,5)) setbit(Key,KB);  // Back
     if(!testbit(in,7)) {  // Light
         setbit(VPORT1.OUT,0);
-        delay_ms(1000);
-        clrbit(VPORT1.OUT,0);
+		backlight = 2; // kamotswolf - new back-light timeout (2 seconds). Turns off in time.c
+        //delay_ms(1000);
+        //clrbit(VPORT1.OUT,0);
 		if(!testbit(PORTF.IN, 6)) Jump_boot();
     }        
     //if(!testbit(in,7))  // Light

@@ -101,6 +101,13 @@ uint8_t options;    // Daylight saving time
 
 // RTC Compare, occurs every 1s, phase 180
 ISR(RTC_COMP_vect, ISR_NAKED) { // Naked ISR (No need to save registers)
+	if(backlight >= 0) { ; // kamotswolf - new back-light timeout, first draft
+		if(backlight == 0) {
+			backlight = -1;
+			clrbit(VPORT1.OUT,0);
+		}
+		else backlight--;
+	}
     EXTCOMML();              // LCD polarity inversion
     asm("reti");
 }
