@@ -4,7 +4,7 @@
 *.elf
 *.o
 *.d
-Debug/Makefile
+*/Makefile
 *.hex
-Debug/makedep.mk
+*.mk
 *.hex
