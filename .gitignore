@@ -5,6 +5,4 @@
 *.o
 *.d
 */Makefile
-*.hex
 *.mk
-*.hex
