@@ -81,7 +81,7 @@ const uint16_t slowcnt[11] PROGMEM = { 1,2,4,8,20,40,80,200,400,800,2000 };
 // Slow sampling: TCE0 = 640Hz, rate = 32*slowcnt/640
 rate SCOPE SETTING  Min. F      Max.F     S/s  Oversample ADCCLK  PRESCALE TCE0 slowcnt  Method
 0       8 uS/div   7812.50Hz     1 MHz     2M      x1     2 MHz     16     x     x       DMA ADC free run
-1      16 uS/div   3906.25Hz   500 kHz     1M      x1     2 MHz     16     x     x       DMA ADC free run
+1      16 uS/div   3906.25Hz   500 kHz     1M      x2     2 MHz     16     x     x       DMA ADC free run
 2      32 uS/div  1953.125Hz   250 kHz   500k      x2     2 MHz     16     x     x       DMA ADC free run
 3      64 uS/div   976.563Hz   125 kHz   250k      x2     1 MHz     32     x     x       DMA ADC free run
 4     128 uS/div   488.281Hz  62.5 kHz   125k      x2   500 kHz     64     x     x       DMA ADC free run
@@ -525,7 +525,7 @@ void MSO(void) {
                 circular=512-DMA.CH0.TRFCNT;   // get index
 ///////////////////////////////////////////////////////////////////////////////
 // Invert and adjust offset, apply channel math, loop thru circular buffer
-                if(Srate<=1) {  // srate 0 and 1 only use the top half of the buffer
+                if(Srate==0) {  // srate 0 only use the top half of the buffer
                     circular+=256;
                     if(circular>=512) circular=circular-512;
                 }
@@ -546,7 +546,7 @@ void MSO(void) {
                         q2=(int8_t *)Temp.IN.CH2;
                         q3=(int8_t *)Temp.IN.CHD;
                     }
-                    if(Srate>1) {   // Srate 0 and 1 only have 256 data points
+                    if(Srate) {   // Srate 0 only has 256 data points
                         if(testbit(CH1ctrl,chaverage)) {
                             ch1raw=((int8_t)(ch1raw)>>1)+((int8_t)(*q1)>>1);
                         }
@@ -2893,24 +2893,20 @@ void Apply(void) {
             TCE0.PER = (uint16_t)pgm_read_word_near(TCE0val+Srate-6); // ADC clock
         }
         else {  // sampling rate 256uS/div and under, use DMA
-            ADCA.CTRLB  = 0x1C;     // signed mode, free run, 8 bit
-            ADCB.CTRLB  = 0x1C;     // signed mode, free run, 8 bit
-            if(Srate>1) {
-                ADCA.PRESCALER = Srate; // Prescaler is 16, 32, 64, ...
-                ADCB.PRESCALER = Srate; // Prescaler is 16, 32, 64, ...
+            //ADCA.CTRLB  = 0x1C;     // signed mode, free run, 8 bit
+            //ADCB.CTRLB  = 0x1C;     // signed mode, free run, 8 bit
+            if(Srate) {
+                ADCA.PRESCALER = Srate+1; // Prescaler is 16, 32, 64, ...
+                ADCB.PRESCALER = Srate+1; // Prescaler is 16, 32, 64, ...
                 ADCA.EVCTRL = 0x00;     // Sweep channels 0
                 ADCB.EVCTRL = 0x00;     // Sweep channels 0
             }
-            else /*if(Srate)*/ {
+            else {
                 ADCA.PRESCALER = 0x02;
                 ADCB.PRESCALER = 0x02;
                 ADCA.EVCTRL = 0x00;     // Sweep channels 0
                 ADCB.EVCTRL = 0x00;     // Sweep channels 0
             }
-/*            else {  // 8uS / div - 2MSPS
-                ADCA.PRESCALER = 0x02;
-                ADCA.EVCTRL = 0x00;     // Only channel 0
-            }*/
         }
     }
     // Display settings
