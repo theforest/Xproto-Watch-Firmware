@@ -13,7 +13,7 @@ typedef struct {
 
 #define LEAP_YEAR(year) ((year%4)==0)   // Valid for the range the watch works on
 
-extern time_var now;
+extern volatile time_var now;
 
 void gettime(time_var *timep);
 void settime(time_var *timep);

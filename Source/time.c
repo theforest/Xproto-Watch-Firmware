@@ -62,7 +62,7 @@ const char days[][4] PROGMEM = {           // Days of the week, Jan-1-2000 was S
     "Sat","Sun","Mon","Tue","Wed","Thu","Fri"
 };
 
-time_var now = {
+volatile time_var now = {
     0,          // sec      Seconds      [0-59]
     41,         // min      Minutes      [0-59]
     23,         // hour     Hours        [0-23]

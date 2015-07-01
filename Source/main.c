@@ -161,7 +161,8 @@ FUSES = {
     .FUSEBYTE2 = 0xBD,  // Reset Configuration
     .FUSEBYTE4 = 0xF7,  // Start-up Configuration
     .FUSEBYTE5 = 0xE9,  // EESAVE and BOD Level
-};/
+};
+*/
 /*  Fuses:
     WDWP = 8CLK
     WDP = 8CLK

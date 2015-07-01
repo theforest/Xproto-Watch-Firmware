@@ -198,6 +198,7 @@ void MSO(void);
 void SaveEE(void);          // Save settings to EEPROM
 void Calibrate(void);
 void CCPWrite( volatile uint8_t * address, uint8_t value );
+void delay_ms(uint16_t n);
 
 extern uint8_t EEMEM EESleepTime;     // Sleep timeout in minutes
 
